@@ -1,18 +1,9 @@
-# Asari-Rashidi 3-Ply Model (Transient Simulation WebGL/Canvas Hybrid Edition)
+# Asari-Rashidi 3-Ply Model (Zero-Latency Browser-Native Edition)
 import streamlit as st
 import numpy as np
 import plotly.graph_objects as go
 import streamlit.components.v1 as components
-import subprocess
-import os
 import json
-
-# --- AUTOMATIC JAVA COMPILATION ON CLOUD RUNTIME ---
-if not os.path.exists("WeldEngine.class"):
-    try:
-        subprocess.check_call(["javac", "WeldEngine.java"])
-    except Exception as e:
-        st.error(f"⚠️ Failed to compile WeldEngine.java: {e}")
 
 # --- CONFIGURATION ---
 st.set_page_config(page_title="Asari-Rashidi SORPAS Time-Sim", layout="wide")
@@ -68,47 +59,23 @@ with st.sidebar:
     d_tip = st.slider("Tip Diameter (mm)", 4.0, 10.0, 6.0)
     k_base = st.slider("Base k-factor", 0.10, 0.60, 0.35)
 
-# --- ENGINE DATA EXTRACTION BRIDGE ---
-def fetch_transient_java_data(curr, max_tm, frc):
-    m1_props = materials_db[mat1]
-    m2_props = materials_db[mat2]
-    
-    cmd = [
-        "java", "WeldEngine",
-        str(t1), str(m1_props["res_factor"]), str(m1_props["k_mod"]),
-        str(t2), str(m2_props["res_factor"]), str(m2_props["k_mod"]),
-        str(is_zinc).lower(), str(d_tip), str(k_base),
-        str(curr), str(max_tm), str(frc)
-    ]
-    try:
-        output = subprocess.check_output(cmd, text=True).strip()
-        time_steps = []
-        for step in output.split("|"):
-            t_step, dia, target, exp = step.split(",")
-            time_steps.append({
-                "cycle": int(t_step),
-                "diameter": float(dia),
-                "min_target": float(target),
-                "expulsion": float(exp)
-            })
-        return time_steps
-    except Exception as e:
-        return [{"cycle": 1, "diameter": 0.0, "min_target": 4.0, "expulsion": 6.0}]
-
-# --- PROCESS CALCULATIONS & VISUALIZATION ---
+# --- GLOBAL MACROS AND CONSTANTS ---
 total_t = t1 + t2
 t_min = min(t1, t2)
 currents = np.linspace(5000, 13000, 50)  
 times = np.linspace(3, 24, 40)
 forces = np.linspace(100, 450, 40)
 
+m1_p, m2_p = materials_db[mat1], materials_db[mat2]
+k_approx = k_base * ((t1*m1_p["k_mod"] + t2*m2_p["k_mod"])/total_t) * ((t1*m1_p["res_factor"] + t2*m2_p["res_factor"])/total_t)
+if is_zinc: k_approx *= 0.82
+tip_eff = (6.0 / d_tip)**2
+target_min = 4 * np.sqrt(t_min)
+
+# --- STATIC LOBE GENERATION (PLOTLY PARALLEL TRACK) ---
 if graph_mode == "Complete 3D Volumetric Lobe":
     I, T, F = np.meshgrid(currents, times, forces)
-    m1_p, m2_p = materials_db[mat1], materials_db[mat2]
-    k_approx = k_base * ((t1*m1_p["k_mod"] + t2*m2_p["k_mod"])/total_t) * ((t1*m1_p["res_factor"] + t2*m2_p["res_factor"])/total_t)
-    if is_zinc: k_approx *= 0.82
-    nugget_growth = k_approx * ((I * (6.0/d_tip)**2)/10000)**2 * (T/10) * (300/F)**0.25 * 5.5
-    target_min = 4 * np.sqrt(t_min)
+    nugget_growth = k_approx * ((I * tip_eff)/10000)**2 * (T/10) * (300/F)**0.25 * 5.5
     
     fig = go.Figure(data=go.Isosurface(
         x=I.flatten(), y=T.flatten(), z=F.flatten(), value=nugget_growth.flatten(),
@@ -128,13 +95,6 @@ if graph_mode == "Complete 3D Volumetric Lobe":
         st.metric("Min Target Dia", f"{round(target_min,2)}mm")
 
 else:
-    simulation_timeline = fetch_transient_java_data(active_current, active_time, active_force)
-    m1_p, m2_p = materials_db[mat1], materials_db[mat2]
-    k_approx = k_base * ((t1*m1_p["k_mod"] + t2*m2_p["k_mod"])/total_t) * ((t1*m1_p["res_factor"] + t2*m2_p["res_factor"])/total_t)
-    if is_zinc: k_approx *= 0.82
-    tip_eff = (6.0 / d_tip)**2
-    target_min = 4 * np.sqrt(t_min)
-    
     if "X-Y Plane" in slice_plane:
         I_2d, T_2d = np.meshgrid(currents, times)
         nugget_growth_2d = k_approx * ((I_2d * tip_eff)/10000)**2 * (T_2d/10) * (300/slice_force)**0.25 * 5.5
@@ -162,13 +122,13 @@ else:
         fig.add_trace(go.Scatter(x=[active_current], y=[active_force], mode='markers', marker=dict(color='white', size=12, symbol='cross'), name='Operating Point'))
         fig.update_layout(xaxis_title="Current (A)", yaxis_title="Force (kg)", template="plotly_dark", height=500, legend=dict(yanchor="top", y=0.99, xanchor="left", x=0.01))
 
-    # --- ADVANCED NATIVE HTML5 CANVAS EMBED ---
+    # --- IN-BROWSER TRANSIENT ENGINE EMBED ---
     canvas_html = """
     <div style="background-color: #111111; padding: 15px; border-radius: 8px; font-family: sans-serif; color: white; box-sizing: border-box; height: 500px;">
         <h4 style="margin-top: 0; margin-bottom: 12px; color: #E0E0E0; font-size: 15px;">Transient Nugget Thermal Development Map</h4>
         <canvas id="weldCanvas" width="540" height="360" style="background-color: #1e1e1e; border: 1px solid #333; display: block; margin: 0 auto; border-radius: 4px;"></canvas>
         
-        <div style="margin-top: 20px; display: flex; gap: 12px; align-items: center; justify-content: center; height: 45px; padding-bottom: 5px;">
+        <div style="margin-top: 20px; display: flex; gap: 12px; align-items: center; justify-content: center; height: 45px;">
             <button onclick="startSimulationPlayback()" style="background-color: #007bff; color: white; border: none; padding: 10px 20px; border-radius: 4px; cursor: pointer; font-weight: bold; font-size: 13px;">▶ Play Growth</button>
             <button onclick="stopSimulationPlayback()" style="background-color: #6c757d; color: white; border: none; padding: 10px 20px; border-radius: 4px; cursor: pointer; font-weight: bold; font-size: 13px;">⏸ Pause</button>
             <span id="cycleLabel" style="font-size: 14px; color: #00ffff; margin-left: 10px; font-family: monospace; font-weight: bold; min-width: 180px;">Ready</span>
@@ -176,29 +136,49 @@ else:
     </div>
 
     <script>
-        // Data block injected cleanly via python string operations
-        const simData = """ + json.dumps(simulation_timeline) + """;
+        // Directly capture variables from Streamlit pipeline without background cross-origin bridge requests
         const t1 = """ + str(t1) + """;
         const t2 = """ + str(t2) + """;
         const dTip = """ + str(d_tip) + """;
         const maxTime = """ + str(active_time) + """;
-        
+        const currentI = """ + str(active_current) + """;
+        const forceF = """ + str(active_force) + """;
+        const kApprox = """ + str(k_approx) + """;
+        const targetMin = """ + str(target_min) + """;
+
         const canvas = document.getElementById('weldCanvas');
         const ctx = canvas.getContext('2d');
         
         let currentFrameIndex = 0;
         let isPlaying = false;
         let animationTimer = null;
+        let simData = [];
 
-        // STATE LIFECYCLE RE-ANCHOR: Force absolute reset if parameters shift
-        function resetSimulationLifecycle() {
-            isPlaying = false;
-            if (animationTimer) clearTimeout(animationTimer);
-            currentFrameIndex = 0;
-            drawFrame(0);
+        // GENERATE TRANSIENT TIMELINE LOCALLY - Eliminates the Java sub-process communication bottleneck completely
+        function computeTransientTimeline() {
+            simData = [];
+            const tipEff = Math.pow(6.0 / dTip, 2);
+            const tMin = Math.min(t1, t2);
+            const expulsionThreshold = (5.5 * Math.sqrt(tMin)) * Math.pow(forceF / 300, 0.1) * Math.pow(dTip / 6.0, 0.2);
+
+            for (let c = 1; c <= maxTime; c++) {
+                // Parabolic physical transient growth rate signature matching transient resistance equations
+                let transientDiameter = kApprox * Math.pow((currentI * tipEff) / 10000, 2) * (c / 10) * Math.pow(300 / forceF, 0.25) * 5.5;
+                
+                // Add physical simulation boundary conditions
+                if (transientDiameter < 0.1) transientDiameter = 0.0;
+                
+                simData.push({
+                    cycle: c,
+                    diameter: transientDiameter,
+                    min_target: targetMin,
+                    expulsion: expulsionThreshold
+                });
+            }
         }
 
         function drawFrame(index) {
+            if (simData.length === 0) return;
             if (index < 0) index = 0;
             if (index >= simData.length) index = simData.length - 1;
             const data = simData[index];
@@ -214,35 +194,35 @@ else:
             const h2 = t2 * scale;
             const tipRadiusX = (dTip / 2) * scale;
 
-            // Sheet 1 (Top Layer)
+            // Sheet 1 Layer
             ctx.fillStyle = 'rgba(100, 149, 237, 0.25)';
             ctx.strokeStyle = 'rgba(100, 149, 237, 0.7)';
             ctx.lineWidth = 1.5;
             ctx.fillRect(centerX - wBox/2, centerY - h1, wBox, h1);
             ctx.strokeRect(centerX - wBox/2, centerY - h1, wBox, h1);
 
-            // Sheet 2 (Bottom Layer)
+            // Sheet 2 Layer
             ctx.fillStyle = 'rgba(144, 238, 144, 0.25)';
             ctx.strokeStyle = 'rgba(144, 238, 144, 0.7)';
             ctx.fillRect(centerX - wBox/2, centerY, wBox, h2);
             ctx.strokeRect(centerX - wBox/2, centerY, wBox, h2);
 
-            // RECALIBRATED GEOMETRY: Prevents cross-sheet penetration bounds
+            // Electrode Geometry Masks - Placed clean flush against surface edges
             ctx.fillStyle = 'rgba(180, 180, 180, 0.75)';
             
-            // Top Electrode Contour
+            // Top Electrode
             ctx.beginPath();
-            ctx.moveTo(centerX - tipRadiusX, centerY - h1); // Flat contact point starts exactly at sheet top edge
-            ctx.lineTo(centerX + tipRadiusX, centerY - h1); // Flat contact length governed by d_tip input
+            ctx.moveTo(centerX - tipRadiusX, centerY - h1);
+            ctx.lineTo(centerX + tipRadiusX, centerY - h1);
             ctx.bezierCurveTo(centerX + tipRadiusX * 1.4, centerY - h1 - 5, centerX + tipRadiusX * 1.6, centerY - h1 - 25, centerX + tipRadiusX * 1.8, centerY - h1 - 40);
             ctx.lineTo(centerX - tipRadiusX * 1.8, centerY - h1 - 40);
             ctx.bezierCurveTo(centerX - tipRadiusX * 1.6, centerY - h1 - 25, centerX - tipRadiusX * 1.4, centerY - h1 - 5, centerX - tipRadiusX, centerY - h1);
             ctx.closePath();
             ctx.fill();
 
-            // Bottom Electrode Contour
+            // Bottom Electrode
             ctx.beginPath();
-            ctx.moveTo(centerX - tipRadiusX, centerY + h2); // Flat contact point starts exactly at sheet bottom edge
+            ctx.moveTo(centerX - tipRadiusX, centerY + h2);
             ctx.lineTo(centerX + tipRadiusX, centerY + h2);
             ctx.bezierCurveTo(centerX + tipRadiusX * 1.4, centerY + h2 + 5, centerX + tipRadiusX * 1.6, centerY + h2 + 25, centerX + tipRadiusX * 1.8, centerY + h2 + 40);
             ctx.lineTo(centerX - tipRadiusX * 1.8, centerY + h2 + 40);
@@ -250,7 +230,7 @@ else:
             ctx.closePath();
             ctx.fill();
 
-            // Dynamic Core Weld Computation Layer
+            // Dynamic Transient Molten Zone Render
             const dia = data.diameter;
             const expulsion = data.expulsion;
 
@@ -259,13 +239,13 @@ else:
                 const penetrationProgress = Math.min(1.0, 0.4 + (data.cycle / maxTime) * 0.6);
                 const hPenetration = (((t1 + t2) * 0.78) / 2) * scale * penetrationProgress;
 
-                // Heat Affected Zone (HAZ Boundary)
+                // HAZ Boundary
                 ctx.fillStyle = 'rgba(255, 140, 0, 0.22)';
                 ctx.beginPath();
                 ctx.ellipse(centerX, centerY, rNugget * 1.28, hPenetration * 1.15, 0, 0, 2 * Math.PI);
                 ctx.fill();
 
-                // Core Molten Metal Pool 
+                // Core Weld Nugget Pool
                 ctx.fillStyle = (dia >= expulsion) ? 'rgba(255, 0, 0, 0.85)' : 'rgba(148, 0, 211, 0.85)';
                 ctx.strokeStyle = '#ffff00';
                 ctx.lineWidth = 2;
@@ -300,8 +280,9 @@ else:
             if (animationTimer) clearTimeout(animationTimer);
         }
 
-        // Initialize state handler
-        resetSimulationLifecycle();
+        // Initialize and display frame 0 immediately
+        computeTransientTimeline();
+        drawFrame(0);
     </script>
     """
 
@@ -309,12 +290,16 @@ else:
     with col1: 
         st.plotly_chart(fig, use_container_width=True)
     with col2: 
-        # Expanded component bounding region to provide clean structural spacing
-        components.html(canvas_html, height=580)
+        components.html(canvas_html, height=560)
         
     st.divider()
-    last_res = simulation_timeline[-1]
+    
+    # Calculate values natively to update lower dashboard cards instantly
+    tip_eff_calc = (6.0 / d_tip)**2
+    final_dia_calc = k_approx * ((active_current * tip_eff_calc)/10000)**2 * (active_time/10) * (300/active_force)**0.25 * 5.5
+    expulsion_threshold_calc = (5.5 * np.sqrt(t_min)) * (active_force / 300)**0.1 * (d_tip / 6.0)**0.2
+    
     m1, m2, m3 = st.columns(3)
-    m1.metric("Final Cycle Size", f"{round(last_res['diameter'], 3)} mm")
-    m2.metric("Target Minimum Bound", f"{round(last_res['min_target'], 2)} mm")
-    m3.metric("Expulsion Threshold Limit", f"{round(last_res['expulsion'], 2)} mm")
+    m1.metric("Final Cycle Size", f"{round(final_dia_calc, 3)} mm")
+    m2.metric("Target Minimum Bound", f"{round(target_min, 2)} mm")
+    m3.metric("Expulsion Threshold Limit", f"{round(expulsion_threshold_calc, 2)} mm")
