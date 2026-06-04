@@ -6,8 +6,8 @@ import streamlit.components.v1 as components
 import json
 
 # --- CONFIGURATION ---
-st.set_page_config(page_title="Spot Welding Process Simulator", layout="wide")
-st.title("🔬 Real-Time Transient Nugget Growth Simulator")
+st.set_page_config(page_title="Asari-Rashidi SORPAS Time-Sim", layout="wide")
+st.title("🔬 Real-Time Transient Nugget Growth Simulator (SORPAS WebGL/Canvas Mode)")
 
 # --- MATERIAL DATABASE ---
 materials_db = {
@@ -122,7 +122,7 @@ else:
         fig.add_trace(go.Scatter(x=[active_current], y=[active_force], mode='markers', marker=dict(color='white', size=12, symbol='cross'), name='Operating Point'))
         fig.update_layout(xaxis_title="Current (A)", yaxis_title="Force (kg)", template="plotly_dark", height=500, legend=dict(yanchor="top", y=0.99, xanchor="left", x=0.01))
 
-    # --- IN-BROWSER TRANSIENT ENGINE EMBED (WITH ADDED CONFIGURATION LEGEND) ---
+    # --- IN-BROWSER TRANSIENT ENGINE EMBED (THERMAL GRADIENT ENGINE EDITION) ---
     canvas_html = """
     <div style="background-color: #111111; padding: 15px; border-radius: 8px; font-family: sans-serif; color: white; box-sizing: border-box; height: 530px;">
         <h4 style="margin-top: 0; margin-bottom: 12px; color: #E0E0E0; font-size: 15px;">Transient Nugget Thermal Development Map</h4>
@@ -138,16 +138,16 @@ else:
                 <span>Bottom Ply (""" + str(mat2.split(" ")[0]) + """)</span>
             </div>
             <div style="display: flex; align-items: center; gap: 5px;">
-                <span style="display: inline-block; width: 14px; height: 10px; background-color: rgba(180, 180, 180, 0.75); border-radius: 2px;"></span>
-                <span>Electrode Tips</span>
+                <span style="display: inline-block; width: 14px; height: 10px; background-image: linear-gradient(to top, #ff4500, #b4b4b4); border-radius: 2px;"></span>
+                <span>Electrode Thermal Gradient</span>
             </div>
             <div style="display: flex; align-items: center; gap: 5px;">
                 <span style="display: inline-block; width: 14px; height: 10px; background-color: rgba(255, 140, 0, 0.22); border-radius: 2px;"></span>
                 <span style="color: #ff8c00;">HAZ Boundary</span>
             </div>
             <div style="display: flex; align-items: center; gap: 5px;">
-                <span style="display: inline-block; width: 14px; height: 10px; background-color: rgba(148, 0, 211, 0.85); border: 1px solid #ffff00; border-radius: 2px;"></span>
-                <span style="color: #df42ff;">Weld Nugget Pool</span>
+                <span style="display: inline-block; width: 14px; height: 10px; background-image: radial-gradient(#ffffff, #9400d3); border: 1px solid #ffff00; border-radius: 2px;"></span>
+                <span style="color: #df42ff;">Molten Pool Gradient</span>
             </div>
         </div>
 
@@ -211,24 +211,38 @@ else:
             const h1 = t1 * scale;
             const h2 = t2 * scale;
             const tipRadiusX = (dTip / 2) * scale;
+            
+            const dia = data.diameter;
+            const expulsion = data.expulsion;
+            
+            // Calculate progress scale (0 to 1) for the thermal diffusion curves
+            const thermalProgress = data.cycle / maxTime;
 
-            // Sheet 1 Layer
+            # --- 1. BASE MATERIAL COLD PANELS ---
             ctx.fillStyle = 'rgba(100, 149, 237, 0.25)';
             ctx.strokeStyle = 'rgba(100, 149, 237, 0.7)';
             ctx.lineWidth = 1.5;
             ctx.fillRect(centerX - wBox/2, centerY - h1, wBox, h1);
             ctx.strokeRect(centerX - wBox/2, centerY - h1, wBox, h1);
 
-            // Sheet 2 Layer
             ctx.fillStyle = 'rgba(144, 238, 144, 0.25)';
             ctx.strokeStyle = 'rgba(144, 238, 144, 0.7)';
             ctx.fillRect(centerX - wBox/2, centerY, wBox, h2);
             ctx.strokeRect(centerX - wBox/2, centerY, wBox, h2);
 
-            // Electrode Geometry Masks
-            ctx.fillStyle = 'rgba(180, 180, 180, 0.75)';
-            
-            // Top Electrode
+            # --- 2. ELECTRODES WITH TRANSIENT CONDUCTIVE GRADIENTS ---
+            // Top Tip Thermal Layer
+            let topGrad = ctx.createLinearGradient(centerX, centerY - h1, centerX, centerY - h1 - 40);
+            if (dia > 0) {
+                // As nugget grows, contact zone turns orange-red, driving heat conduction upward
+                let tipHeatColor = `rgba(${Math.floor(200 + 55 * thermalProgress)}, ${Math.floor(69 + 40 * thermalProgress)}, 0, 0.85)`;
+                topGrad.addColorStop(0, tipHeatColor);
+                topGrad.addColorStop(0.35 * thermalProgress, 'rgba(180, 70, 30, 0.8)');
+                topGrad.addColorStop(1, 'rgba(180, 180, 180, 0.85)');
+            } else {
+                topGrad.addColorStop(0, 'rgba(180, 180, 180, 0.85)');
+            }
+            ctx.fillStyle = topGrad;
             ctx.beginPath();
             ctx.moveTo(centerX - tipRadiusX, centerY - h1);
             ctx.lineTo(centerX + tipRadiusX, centerY - h1);
@@ -238,7 +252,17 @@ else:
             ctx.closePath();
             ctx.fill();
 
-            // Bottom Electrode
+            // Bottom Tip Thermal Layer
+            let botGrad = ctx.createLinearGradient(centerX, centerY + h2, centerX, centerY + h2 + 40);
+            if (dia > 0) {
+                let tipHeatColor = `rgba(${Math.floor(200 + 55 * thermalProgress)}, ${Math.floor(69 + 40 * thermalProgress)}, 0, 0.85)`;
+                botGrad.addColorStop(0, tipHeatColor);
+                botGrad.addColorStop(0.35 * thermalProgress, 'rgba(180, 70, 30, 0.8)');
+                botGrad.addColorStop(1, 'rgba(180, 180, 180, 0.85)');
+            } else {
+                botGrad.addColorStop(0, 'rgba(180, 180, 180, 0.85)');
+            }
+            ctx.fillStyle = botGrad;
             ctx.beginPath();
             ctx.moveTo(centerX - tipRadiusX, centerY + h2);
             ctx.lineTo(centerX + tipRadiusX, centerY + h2);
@@ -248,24 +272,38 @@ else:
             ctx.closePath();
             ctx.fill();
 
-            // Dynamic Transient Molten Zone Render
-            const dia = data.diameter;
-            const expulsion = data.expulsion;
-
+            # --- 3. DYNAMIC THERMAL NUGGET MOLTEN GRADIENT ---
             if (dia > 0.05) {
                 const rNugget = (dia / 2) * scale;
                 const penetrationProgress = Math.min(1.0, 0.4 + (data.cycle / maxTime) * 0.6);
                 const hPenetration = (((t1 + t2) * 0.78) / 2) * scale * penetrationProgress;
 
-                // HAZ Boundary
+                // HAZ Boundary (Outer Heat Field Envelope)
                 ctx.fillStyle = 'rgba(255, 140, 0, 0.22)';
                 ctx.beginPath();
                 ctx.ellipse(centerX, centerY, rNugget * 1.28, hPenetration * 1.15, 0, 0, 2 * Math.PI);
                 ctx.fill();
 
-                // Core Weld Nugget Pool
-                ctx.fillStyle = (dia >= expulsion) ? 'rgba(255, 0, 0, 0.85)' : 'rgba(148, 0, 211, 0.85)';
-                ctx.strokeStyle = '#ffff00';
+                // Core Weld Pool Radial Heat Distribution Map
+                let poolGrad = ctx.createRadialGradient(centerX, centerY, rNugget * 0.1, centerX, centerY, rNugget);
+                
+                if (dia >= expulsion) {
+                    // Critical Expulsion State Color Signature (White hot core transitioning out to volatile red-orange)
+                    poolGrad.addColorStop(0, '#ffffff');
+                    poolGrad.addColorStop(0.2, '#ffff00');
+                    poolGrad.addColorStop(0.6, '#ff0000');
+                    poolGrad.addColorStop(1, 'rgba(139, 0, 0, 0.9)');
+                    ctx.strokeStyle = '#ff0000';
+                } else {
+                    // Stable Thermal Growth Profile (Melted yellow/white core bleeding out to deep molten purple)
+                    poolGrad.addColorStop(0, '#ffffff');
+                    poolGrad.addColorStop(0.25, '#ffcc00');
+                    poolGrad.addColorStop(0.65, '#9400d3');
+                    poolGrad.addColorStop(1, '#4b0082');
+                    ctx.strokeStyle = '#ffff00';
+                }
+                
+                ctx.fillStyle = poolGrad;
                 ctx.lineWidth = 2;
                 ctx.beginPath();
                 ctx.ellipse(centerX, centerY, rNugget, hPenetration, 0, 0, 2 * Math.PI);
@@ -279,15 +317,24 @@ else:
         function playbackLoop() {
             if (!isPlaying) return;
             currentFrameIndex++;
+            
+            // SINGLE-PLAY CRITICAL BOUNDARY LIFECYCLE CONTROLLER
             if (currentFrameIndex >= simData.length) {
-                currentFrameIndex = 0; 
+                isPlaying = false; // Stop playback
+                if (animationTimer) clearTimeout(animationTimer);
+                return; // Cease execution immediately without looping back
             }
+            
             drawFrame(currentFrameIndex);
             animationTimer = setTimeout(playbackLoop, 120);
         }
 
         function startSimulationPlayback() {
             if (!isPlaying) {
+                // If timeline reached the end, reset back to frame 0 for a clean replay loop on tap
+                if (currentFrameIndex >= simData.length - 1) {
+                    currentFrameIndex = 0;
+                }
                 isPlaying = true;
                 playbackLoop();
             }
@@ -307,12 +354,11 @@ else:
     with col1: 
         st.plotly_chart(fig, use_container_width=True)
     with col2: 
-        # Bumped up height marginally to comfortably nestle the legend rows
         components.html(canvas_html, height=590)
         
     st.divider()
     
-    # Static lower deck metric validation variables
+    # Lower Dashboard Calculations
     tip_eff_calc = (6.0 / d_tip)**2
     final_dia_calc = k_approx * ((active_current * tip_eff_calc)/10000)**2 * (active_time/10) * (300/active_force)**0.25 * 5.5
     expulsion_threshold_calc = (5.5 * np.sqrt(t_min)) * (active_force / 300)**0.1 * (d_tip / 6.0)**0.2
