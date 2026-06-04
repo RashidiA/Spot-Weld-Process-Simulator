@@ -1,9 +1,11 @@
-# Asari-Rashidi 3-Ply Model (Transient Simulation Hybrid Version)
+# Asari-Rashidi 3-Ply Model (Transient Simulation WebGL/Canvas Hybrid Edition)
 import streamlit as st
 import numpy as np
 import plotly.graph_objects as go
+import streamlit.components.v1 as components
 import subprocess
 import os
+import json
 
 # --- AUTOMATIC JAVA COMPILATION ON CLOUD RUNTIME ---
 if not os.path.exists("WeldEngine.class"):
@@ -14,7 +16,7 @@ if not os.path.exists("WeldEngine.class"):
 
 # --- CONFIGURATION ---
 st.set_page_config(page_title="Asari-Rashidi SORPAS Time-Sim", layout="wide")
-st.title("🔬 Real-Time Transient Nugget Growth Simulator (SORPAS Mode)")
+st.title("🔬 Real-Time Transient Nugget Growth Simulator (SORPAS WebGL/Canvas Mode)")
 
 # --- MATERIAL DATABASE ---
 materials_db = {
@@ -160,81 +162,145 @@ else:
         fig.add_trace(go.Scatter(x=[active_current], y=[active_force], mode='markers', marker=dict(color='white', size=12, symbol='cross'), name='Operating Point'))
         fig.update_layout(xaxis_title="Current (A)", yaxis_title="Force (kg)", template="plotly_dark", height=500, legend=dict(yanchor="top", y=0.99, xanchor="left", x=0.01))
 
-    # --- TRANSIENT SORPAS ANIMATED COUPLING SYSTEM ---
-    sorpas_fig = go.Figure()
-    width_box = d_tip * 2.5
-    mid_y = (t1 - t2) / 2.0
-    theta = np.linspace(0, 2*np.pi, 100)
+    # --- NATIVE GRAPHICS ENGINE INTERACTION INJECTOR ---
+    canvas_html = f"""
+    <div style="background-color: #111111; padding: 15px; border-radius: 8px; font-family: sans-serif; color: white;">
+        <h4 style="margin-top: 0; color: #E0E0E0;">Transient Nugget Thermal Development Map</h4>
+        <canvas id="weldCanvas" width="550" height="350" style="background-color: #1e1e1e; border: 1px solid #333; display: block; margin: 0 auto;"></canvas>
+        <div style="margin-top: 15px; display: flex; gap: 10px; align-items: center; justify-content: center;">
+            <button id="playBtn" style="background-color: #007bff; color: white; border: none; padding: 8px 16px; border-radius: 4px; cursor: pointer; font-weight: bold;">▶ Play Growth</button>
+            <button id="pauseBtn" style="background-color: #6c757d; color: white; border: none; padding: 8px 16px; border-radius: 4px; cursor: pointer; font-weight: bold;">⏸ Pause</button>
+            <span id="cycleLabel" style="font-size: 14px; color: #00ffff; margin-left: 10px; font-family: monospace;">Cycle: 0 / 0</span>
+        </div>
+    </div>
 
-    # Static Traces (Sheets & Tips)
-    sheet1 = go.Scatter(x=[-width_box, width_box, width_box, -width_box, -width_box], y=[0.0, 0.0, t1, t1, 0.0], fill="toself", fillcolor='rgba(100, 149, 237, 0.25)', line=dict(color='royalblue'), name=mat1)
-    sheet2 = go.Scatter(x=[-width_box, width_box, width_box, -width_box, -width_box], y=[-t2, -t2, 0.0, 0.0, -t2], fill="toself", fillcolor='rgba(144, 238, 144, 0.25)', line=dict(color='forestgreen'), name=mat2)
-    tip_top = go.Scatter(x=[-d_tip/2, d_tip/2, d_tip/2*1.3, -d_tip/2*1.3, -d_tip/2], y=[t1, t1, t1+1.5, t1+1.5, t1], fill="toself", fillcolor='rgba(180,180,180,0.6)', name="Top Tip")
-    tip_bottom = go.Scatter(x=[-d_tip/2, d_tip/2, d_tip/2*1.3, -d_tip/2*1.3, -d_tip/2], y=[-t2, -t2, -t2-1.5, -t2-1.5, -t2], fill="toself", fillcolor='rgba(180,180,180,0.6)', name="Bottom Tip")
-    
-    # Placeholder Dynamic Traces (HAZ and Pool)
-    haz_trace = go.Scatter(x=[None], y=[None], fill="toself", fillcolor='rgba(255,140,0,0.25)', name="HAZ Zone", mode='lines')
-    pool_trace = go.Scatter(x=[None], y=[None], fill="toself", fillcolor='rgba(148, 0, 211, 0.85)', line=dict(color='yellow', width=1.5), name="Weld Pool", mode='lines')
-
-    # Add all initial traces
-    sorpas_fig.add_trace(sheet1)
-    sorpas_fig.add_trace(sheet2)
-    sorpas_fig.add_trace(tip_top)
-    sorpas_fig.add_trace(tip_bottom)
-    sorpas_fig.add_trace(haz_trace)
-    sorpas_fig.add_trace(pool_trace)
-
-    frames = []
-    for step in simulation_timeline:
-        dia = step["diameter"]
-        exp_limit = step["expulsion"]
+    <script>
+        const simData = {json.dumps(simulation_timeline)};
+        const t1 = {t1};
+        const t2 = {t2};
+        const dTip = {d_tip};
+        const maxTime = {active_time};
         
-        if dia > 0.1:
-            r_nugget = dia / 2.0
-            h_p = (total_t * 0.75) / 2.0 * min(1.0, 0.4 + (step["cycle"] / active_time) * 0.6)
-            n_color = 'rgba(255, 0, 0, 0.9)' if dia >= exp_limit else 'rgba(148, 0, 211, 0.85)'
+        const canvas = document.getElementById('weldCanvas');
+        const ctx = canvas.getContext('2d');
+        
+        let currentFrameIndex = 0;
+        let isPlaying = false;
+        let animationTimer = null;
+
+        function drawFrame(index) {{
+            if (index >= simData.length) index = simData.length - 1;
+            const data = simData[index];
             
-            x_haz = list(r_nugget * 1.25 * np.cos(theta))
-            y_haz = list(mid_y + h_p * 1.15 * np.sin(theta))
-            x_pool = list(r_nugget * np.cos(theta))
-            y_pool = list(mid_y + h_p * np.sin(theta))
-        else:
-            x_haz, y_haz, x_pool, y_pool = [None], [None], [None], [None]
-            n_color = 'rgba(148, 0, 211, 0.85)'
+            // Clear Frame
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+            
+            // Center Transformations Coordinate Mapping
+            const centerX = canvas.width / 2;
+            const centerY = canvas.height / 2;
+            const scale = 35; // Pixels per mm
+            
+            const wBox = dTip * 2.5 * scale;
+            const h1 = t1 * scale;
+            const h2 = t2 * scale;
+            const tipW = (dTip / 2) * scale;
 
-        frames.append(go.Frame(
-            data=[
-                sheet1, sheet2, tip_top, tip_bottom,
-                go.Scatter(x=x_haz, y=y_haz),
-                go.Scatter(x=x_pool, y=y_pool, fillcolor=n_color)
-            ],
-            name=f"cycle_{step['cycle']}"
-        ))
+            // 1. Draw Sheet 1 (Top)
+            ctx.fillStyle = 'rgba(100, 149, 237, 0.35)';
+            ctx.strokeStyle = 'rgba(100, 149, 237, 0.8)';
+            ctx.lineWidth = 1.5;
+            ctx.fillRect(centerX - wBox/2, centerY - h1, wBox, h1);
+            ctx.strokeRect(centerX - wBox/2, centerY - h1, wBox, h1);
 
-    sorpas_fig.frames = frames
+            // 2. Draw Sheet 2 (Bottom)
+            ctx.fillStyle = 'rgba(144, 238, 144, 0.35)';
+            ctx.strokeStyle = 'rgba(144, 238, 144, 0.8)';
+            ctx.fillRect(centerX - wBox/2, centerY, wBox, h2);
+            ctx.strokeRect(centerX - wBox/2, centerY, wBox, h2);
 
-    sorpas_fig.update_layout(
-        title="Transient Nugget Thermal Development Map",
-        template="plotly_dark", height=500,
-        yaxis=dict(scaleanchor="x", scaleratio=1, range=[-t2 - 2, t1 + 2]),
-        xaxis=dict(range=[-width_box, width_box]),
-        updatemenus=[dict(
-            type="buttons", showactive=False,
-            x=0.05, y=-0.2,
-            buttons=[
-                dict(label="▶ Play", method="animate", args=[None, dict(frame=dict(duration=100, redraw=True), fromcurrent=True)]),
-                dict(label="⏸ Pause", method="animate", args=[[None], dict(frame=dict(duration=0, redraw=True), mode="immediate")])
-            ]
-        )],
-        sliders=[dict(
-            steps=[dict(method="animate", args=[[f"cycle_{s['cycle']}"], dict(mode="immediate", frame=dict(duration=0, redraw=True))], label=f"{s['cycle']}") for s in simulation_timeline],
-            x=0.3, y=-0.1, len=0.7
-        )]
-    )
+            // 3. Draw Copper Electrode Tip (Top)
+            ctx.fillStyle = 'rgba(200, 200, 200, 0.7)';
+            ctx.beginPath();
+            ctx.moveTo(centerX - tipW, centerY - h1);
+            ctx.lineTo(centerX + tipW, centerY - h1);
+            ctx.lineTo(centerX + tipW * 1.3, centerY - h1 - 40);
+            ctx.lineTo(centerX - tipW * 1.3, centerY - h1 - 40);
+            ctx.closePath();
+            ctx.fill();
+
+            // 4. Draw Copper Electrode Tip (Bottom)
+            ctx.beginPath();
+            ctx.moveTo(centerX - tipW, centerY + h2);
+            ctx.lineTo(centerX + tipW, centerY + h2);
+            ctx.lineTo(centerX + tipW * 1.3, centerY + h2 + 40);
+            ctx.lineTo(centerX - tipW * 1.3, centerY + h2 + 40);
+            ctx.closePath();
+            ctx.fill();
+
+            // 5. Draw Dynamic Thermal Growth (HAZ & Molten Pool)
+            const dia = data.diameter;
+            const expulsion = data.expulsion;
+
+            if (dia > 0.1) {{
+                const rNugget = (dia / 2) * scale;
+                const midY = centerY + ((h1 - h2) / 2) - (h1/2);
+                
+                // Progressive vertical penetration factor based on calculation cycles
+                const penetrationProgress = Math.min(1.0, 0.4 + (data.cycle / maxTime) * 0.6);
+                const hPenetration = (((t1 + t2) * 0.75) / 2) * scale * penetrationProgress;
+
+                // Heat Affected Zone (HAZ) Outward Layer Expansion
+                ctx.fillStyle = 'rgba(255, 140, 0, 0.3)';
+                ctx.beginPath();
+                ctx.ellipse(centerX, centerY, rNugget * 1.25, hPenetration * 1.15, 0, 0, 2 * Math.PI);
+                ctx.fill();
+
+                // Core Molten Weld Pool
+                ctx.fillStyle = (dia >= expulsion) ? 'rgba(255, 0, 0, 0.85)' : 'rgba(148, 0, 211, 0.85)';
+                ctx.strokeStyle = '#ffff00';
+                ctx.lineWidth = 2;
+                ctx.beginPath();
+                ctx.ellipse(centerX, centerY, rNugget, hPenetration, 0, 0, 2 * Math.PI);
+                ctx.fill();
+                ctx.stroke();
+            }}
+
+            // Update Track UI Counter Text String
+            document.getElementById('cycleLabel').innerText = `Cycle: ${{data.cycle}} / ${{maxTime}} (${{dia.toFixed(2)}} mm)`;
+        }}
+
+        function tick() {{
+            if (!isPlaying) return;
+            currentFrameIndex++;
+            if (currentFrameIndex >= simData.length) {{
+                currentFrameIndex = 0; // Loop play natively
+            }}
+            drawFrame(currentFrameIndex);
+            animationTimer = setTimeout(tick, 120);
+        }}
+
+        document.getElementById('playBtn').addEventListener('click', () => {{
+            if (!isPlaying) {{
+                isPlaying = true;
+                tick();
+            }}
+        }});
+
+        document.getElementById('pauseBtn').addEventListener('click', () => {{
+            isPlaying = false;
+            if (animationTimer) clearTimeout(animationTimer);
+        }});
+
+        // Initialize display on load frame window loop
+        drawFrame(0);
+    </script>
+    """
 
     col1, col2 = st.columns([1, 1])
-    with col1: st.plotly_chart(fig, use_container_width=True)
-    with col2: st.plotly_chart(sorpas_fig, use_container_width=True)
+    with col1: 
+        st.plotly_chart(fig, use_container_width=True)
+    with col2: 
+        components.html(canvas_html, height=450)
         
     st.divider()
     last_res = simulation_timeline[-1]
