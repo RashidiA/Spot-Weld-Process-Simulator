@@ -1,13 +1,27 @@
-# Asari-Rashidi 3-Ply Model (Open Source Version)
-# License: MIT
+# Asari-Rashidi 3-Ply Model (Open Source Hybrid Version)
 import streamlit as st
 import numpy as np
 import plotly.graph_objects as go
-import pandas as pd 
+import pandas as pd
+import subprocess
+import os
+
+# ==============================================================================
+# --- AUTOMATIC JAVA COMPILATION ON CLOUD RUNTIME ---
+# This ensures that when GitHub deploys to Streamlit Cloud, the Java engine
+# compiles successfully on the Linux server without manual compilation steps.
+# ==============================================================================
+if not os.path.exists("WeldEngine.class"):
+    try:
+        # Runs the Linux system Java compiler in the background
+        subprocess.check_call(["javac", "WeldEngine.java"])
+    except Exception as e:
+        st.error(f"⚠️ Failed to compile WeldEngine.java on server startup: {e}")
+        st.info("Please verify that packages.txt contains 'default-jdk' and is placed at your repository root.")
 
 # --- CONFIGURATION ---
-st.set_page_config(page_title="Asari-Rashidi 3-Ply Analysis", layout="wide")
-st.title("🔬 Asari-Rashidi 3D Lobe: Multi-Ply Analysis")
+st.set_page_config(page_title="Asari-Rashidi Hybrid Simulator", layout="wide")
+st.title("🔬 Asari-Rashidi Lobe Window + SORPAS-Style Cross Section")
 
 # --- MATERIAL DATABASE ---
 materials_db = {
@@ -35,8 +49,16 @@ with st.sidebar:
         )
         if "X-Y Plane" in slice_plane:
             slice_force = st.slider("Slice Location: Fixed Force (kg)", 100, 450, 250, step=10)
+            st.subheader("💡 Active Operating Point")
+            active_current = st.slider("Operating Current (A)", 5000, 13000, 9500, step=100)
+            active_time = st.slider("Operating Time (Cycles)", 3, 17, 10, step=1)
+            active_force = slice_force
         else:
             slice_time = st.slider("Slice Location: Fixed Time (Cycles)", 3, 17, 10, step=1)
+            st.subheader("💡 Active Operating Point")
+            active_current = st.slider("Operating Current (A)", 5000, 13000, 9500, step=100)
+            active_force = st.slider("Operating Force (kg)", 100, 450, 250, step=10)
+            active_time = slice_time
 
     st.divider()
     st.header("1. Ply 1 (Top)")
@@ -46,47 +68,60 @@ with st.sidebar:
     st.header("2. Ply 2 (Middle/Bottom)")
     mat2 = st.selectbox("Material 2", list(materials_db.keys()), index=2)
     t2 = st.slider("Thickness 2 (mm)", 0.5, 3.0, 1.2)
-    
-    st.header("3. Ply 3 (Optional Bottom)")
-    mat3_choice = st.selectbox("Material 3", ["NIL"] + list(materials_db.keys()), index=0)
-    t3 = st.slider("Thickness 3 (mm)", 0.5, 3.0, 1.0) if mat3_choice != "NIL" else 0.0
 
-    st.header("4. Machine Settings")
+    st.header("3. Machine Settings")
     is_zinc = st.checkbox("Zinc Coated (GA/GI)?")
     d_tip = st.slider("Tip Diameter (mm)", 4.0, 10.0, 6.0)
     k_base = st.slider("Base k-factor", 0.10, 0.60, 0.35)
     expulsion_sens = st.slider("Expulsion Limit Factor", 1.2, 1.8, 1.4)
 
-# --- CALCULATION ENGINE ---
-active_plies = [
-    {"mat": mat1, "t": t1, "props": materials_db[mat1]},
-    {"mat": mat2, "t": t2, "props": materials_db[mat2]}
-]
-if mat3_choice != "NIL":
-    active_plies.append({"mat": mat3_choice, "t": t3, "props": materials_db[mat3_choice]})
+# --- CALCULATION PREPARATIONS ---
+total_t = t1 + t2
+t_min = min(t1, t2)
+max_ce = max(materials_db[mat1]['ce'], materials_db[mat2]['ce'])
 
-total_t = sum(p['t'] for p in active_plies)
-t_min = min(p['t'] for p in active_plies)
-avg_res = sum(p['t'] * p['props']['res_factor'] for p in active_plies) / total_t
-avg_k_mod = sum(p['t'] * p['props']['k_mod'] for p in active_plies) / total_t
-max_ce = max(p['props']['ce'] for p in active_plies)
-
-k_final = k_base * avg_k_mod * avg_res
-if is_zinc:
-    k_final *= 0.82
-
-target_min = 4 * np.sqrt(t_min)
-
-# Generate 3D Space Matrices
+# Generate coordinate spaces for mapping contour projections
 currents = np.linspace(5000, 13000, 50)  
 times = np.linspace(3, 17, 40)
 forces = np.linspace(100, 450, 40)
 
-# --- GRAPH GENERATION LAYER ---
+# ==============================================================================
+# --- JAVA BRIDGE SUBPROCESS INTEROP EXECUTION ---
+# Passes dynamic parameters safely to the compiled Java byteclass, listens
+# for the standard stream output, and maps values back to Python instantly.
+# ==============================================================================
+def execute_java_calculation(curr, tm, frc):
+    m1_props = materials_db[mat1]
+    m2_props = materials_db[mat2]
+    
+    cmd = [
+        "java", "WeldEngine",
+        str(t1), str(m1_props["res_factor"]), str(m1_props["k_mod"]),
+        str(t2), str(m2_props["res_factor"]), str(m2_props["k_mod"]),
+        str(is_zinc).lower(), str(d_tip), str(k_base),
+        str(curr), str(tm), str(frc)
+    ]
+    try:
+        output = subprocess.check_output(cmd, text=True).strip()
+        dia, target, exp = map(float, output.split("|"))
+        return dia, target, exp
+    except:
+        # Fallback values if Java runtime is interrupted or still booting
+        return 0.0, 4.0, 6.0
+
+# --- CORE VISUALIZATION LOGIC LAYER ---
 if graph_mode == "Complete 3D Volumetric Lobe":
     I, T, F = np.meshgrid(currents, times, forces)
+    m1_p = materials_db[mat1]
+    m2_p = materials_db[mat2]
+    
+    # Mathematical approximation matching background calculation loops
+    k_approx = k_base * ((t1*m1_p["k_mod"] + t2*m2_p["k_mod"])/total_t) * ((t1*m1_p["res_factor"] + t2*m2_p["res_factor"])/total_t)
+    if is_zinc: k_approx *= 0.82
+    
     tip_eff = (6.0 / d_tip)**2 
-    nugget_growth = k_final * ((I * tip_eff)/10000)**2 * (T/10) * (300/F)**0.25 * 5.5
+    nugget_growth = k_approx * ((I * tip_eff)/10000)**2 * (T/10) * (300/F)**0.25 * 5.5
+    target_min = 4 * np.sqrt(t_min)
     exp_limit_mesh = (5.5 * np.sqrt(t_min)) * (F / 300)**0.1 * (d_tip / 6.0)**0.2 * (expulsion_sens / 1.4)
 
     fig = go.Figure(data=go.Isosurface(
@@ -103,139 +138,81 @@ if graph_mode == "Complete 3D Volumetric Lobe":
     )
 
 else:
+    # 2D cross section calculation loops calling the Java Core Engine
+    calc_dia, target_min, calc_expulsion = execute_java_calculation(active_current, active_time, active_force)
     tip_eff = (6.0 / d_tip)**2
+    m1_p, m2_p = materials_db[mat1], materials_db[mat2]
+    k_approx = k_base * ((t1*m1_p["k_mod"] + t2*m2_p["k_mod"])/total_t) * ((t1*m1_p["res_factor"] + t2*m2_p["res_factor"])/total_t)
+    if is_zinc: k_approx *= 0.82
     
     if "X-Y Plane" in slice_plane:
         I_2d, T_2d = np.meshgrid(currents, times)
-        F_fixed = slice_force
-        
-        nugget_growth_2d = k_final * ((I_2d * tip_eff)/10000)**2 * (T_2d/10) * (300/F_fixed)**0.25 * 5.5
-        exp_limit_2d = (5.5 * np.sqrt(t_min)) * (F_fixed / 300)**0.1 * (d_tip / 6.0)**0.2 * (expulsion_sens / 1.4)
+        nugget_growth_2d = k_approx * ((I_2d * tip_eff)/10000)**2 * (T_2d/10) * (300/slice_force)**0.25 * 5.5
+        exp_limit_2d = (5.5 * np.sqrt(t_min)) * (slice_force / 300)**0.1 * (d_tip / 6.0)**0.2 * (expulsion_sens / 1.4)
         
         fig = go.Figure()
-        
-        fig.add_trace(go.Contour(
-            x=currents, y=times, z=nugget_growth_2d,
-            colorscale='Plasma',
-            colorbar=dict(title='Dia (mm)'),
-            contours=dict(showlabels=True, labelfont=dict(size=12, color='white'))
-        ))
-        
-        fig.add_trace(go.Contour(
-            x=currents, y=times, z=nugget_growth_2d,
-            showscale=False,
-            contours_coloring='none',
-            contours=dict(start=target_min, end=target_min, coloring='none'),
-            line=dict(color='cyan', width=4),
-            name=f'Min Nugget ({round(target_min,2)}mm)'
-        ))
-        
-        fig.add_trace(go.Contour(
-            x=currents, y=times, z=nugget_growth_2d,
-            showscale=False,
-            contours_coloring='none',
-            contours=dict(start=exp_limit_2d, end=exp_limit_2d, coloring='none'),
-            line=dict(color='red', width=4, dash='dash'),
-            name=f'Expulsion Bound ({round(exp_limit_2d,2)}mm)'
-        ))
-        
-        fig.update_layout(
-            title=f"2D Cross-Section (Weld Lobe Window) at Force = {F_fixed} kg",
-            xaxis_title="Welding Current (A)",
-            yaxis_title="Welding Time (Cycles)",
-            height=700,
-            showlegend=True,
-            # FIXED: Added font color configuration to turn text white
-            legend=dict(
-                yanchor="top", y=0.99, 
-                xanchor="left", x=0.01, 
-                bgcolor="rgba(0,0,0,0.65)",
-                font=dict(color="white", size=12)
-            )
-        )
-        
+        fig.add_trace(go.Contour(x=currents, y=times, z=nugget_growth_2d, colorscale='Plasma', colorbar=dict(title='Dia (mm)')))
+        fig.add_trace(go.Contour(x=currents, y=times, z=nugget_growth_2d, showscale=False, contours_coloring='none',
+                                 contours=dict(start=target_min, end=target_min, coloring='none'), line=dict(color='cyan', width=4), name='Min Target'))
+        fig.add_trace(go.Contour(x=currents, y=times, z=nugget_growth_2d, showscale=False, contours_coloring='none',
+                                 contours=dict(start=exp_limit_2d, end=exp_limit_2d, coloring='none'), line=dict(color='red', width=4, dash='dash'), name='Expulsion'))
+        fig.add_trace(go.Scatter(x=[active_current], y=[active_time], mode='markers', marker=dict(color='white', size=12, symbol='cross'), name='Operating Point'))
+        fig.update_layout(xaxis_title="Current (A)", yaxis_title="Time (Cycles)", height=500, legend=dict(font=dict(color="white", size=12), bgcolor="rgba(0,0,0,0.65)"))
     else:
         I_2d, F_2d = np.meshgrid(currents, forces)
-        T_fixed = slice_time
-        
-        nugget_growth_2d = k_final * ((I_2d * tip_eff)/10000)**2 * (T_fixed/10) * (300/F_2d)**0.25 * 5.5
+        nugget_growth_2d = k_approx * ((I_2d * tip_eff)/10000)**2 * (slice_time/10) * (300/F_2d)**0.25 * 5.5
         exp_limit_2d = (5.5 * np.sqrt(t_min)) * (F_2d / 300)**0.1 * (d_tip / 6.0)**0.2 * (expulsion_sens / 1.4)
         
         fig = go.Figure()
-        
-        fig.add_trace(go.Contour(
-            x=currents, y=forces, z=nugget_growth_2d,
-            colorscale='Plasma',
-            colorbar=dict(title='Dia (mm)'),
-            contours=dict(showlabels=True, labelfont=dict(size=12, color='white'))
-        ))
-        
-        fig.add_trace(go.Contour(
-            x=currents, y=forces, z=nugget_growth_2d,
-            showscale=False,
-            contours_coloring='none',
-            contours=dict(start=target_min, end=target_min, coloring='none'),
-            line=dict(color='cyan', width=4),
-            name=f'Min Nugget ({round(target_min,2)}mm)'
-        ))
-        
-        fig.add_trace(go.Contour(
-            x=currents, y=forces, z=(nugget_growth_2d - exp_limit_2d),
-            showscale=False,
-            contours_coloring='none',
-            contours=dict(start=0, end=0, coloring='none'),
-            line=dict(color='red', width=4, dash='dash'),
-            name='Expulsion Bound Line'
-        ))
-        
-        fig.update_layout(
-            title=f"2D Cross-Section (Weld Lobe Window) at Time = {T_fixed} Cycles",
-            xaxis_title="Welding Current (A)",
-            yaxis_title="Welding Force (kg)",
-            height=700,
-            showlegend=True,
-            # FIXED: Added font color configuration to turn text white
-            legend=dict(
-                yanchor="top", y=0.99, 
-                xanchor="left", x=0.01, 
-                bgcolor="rgba(0,0,0,0.65)",
-                font=dict(color="white", size=12)
-            )
-        )
+        fig.add_trace(go.Contour(x=currents, y=forces, z=nugget_growth_2d, colorscale='Plasma', colorbar=dict(title='Dia (mm)')))
+        fig.add_trace(go.Contour(x=currents, y=forces, z=nugget_growth_2d, showscale=False, contours_coloring='none',
+                                 contours=dict(start=target_min, end=target_min, coloring='none'), line=dict(color='cyan', width=4), name='Min Target'))
+        fig.add_trace(go.Contour(x=currents, y=forces, z=(nugget_growth_2d - exp_limit_2d), showscale=False, contours_coloring='none',
+                                 contours=dict(start=0, end=0, coloring='none'), line=dict(color='red', width=4, dash='dash'), name='Expulsion'))
+        fig.add_trace(go.Scatter(x=[active_current], y=[active_force], mode='markers', marker=dict(color='white', size=12, symbol='cross'), name='Operating Point'))
+        fig.update_layout(xaxis_title="Current (A)", yaxis_title="Force (kg)", height=500, legend=dict(font=dict(color="white", size=12), bgcolor="rgba(0,0,0,0.65)"))
 
-# --- DISPLAY & EXPORT ---
-col1, col2 = st.columns([3, 1])
-with col1:
-    st.plotly_chart(fig, use_container_width=True)
-
-with col2:
-    st.subheader("Weldability Report")
-    st.metric("Total Thickness", f"{round(total_t, 2)} mm")
-    st.metric("Effective k-Factor", round(k_final, 3))
-    st.metric("Min Nugget Target", f"{round(target_min, 2)} mm")
+    # --- SORPAS-STYLE GEOMETRIC ENGINE MAP ---
+    sorpas_fig = go.Figure()
+    width_box = d_tip * 2.5
     
-    risk_level = "Low"
-    if max_ce > 0.3:
-        risk_level = "High"
-        st.error(f"⚠️ {risk_level} RISK: Brittle Weld.")
-    elif max_ce > 0.15:
-        risk_level = "Moderate"
-        st.warning(f"⚠️ {risk_level} RISK: Possible brittle zones.")
-    else:
-        st.success(f"✅ {risk_level} RISK: Ductile weld.")
+    # Ply Stacks
+    sorpas_fig.add_trace(go.Scatter(x=[-width_box, width_box, width_box, -width_box, -width_box], y=[0.0, 0.0, t1, t1, 0.0], fill="toself", fillcolor='rgba(100, 149, 237, 0.3)', line=dict(color='royalblue'), name=mat1))
+    sorpas_fig.add_trace(go.Scatter(x=[-width_box, width_box, width_box, -width_box, -width_box], y=[-t2, -t2, 0.0, 0.0, -t2], fill="toself", fillcolor='rgba(144, 238, 144, 0.3)', line=dict(color='forestgreen'), name=mat2))
+    
+    # Electrode Tips
+    ew = d_tip / 2.0
+    sorpas_fig.add_trace(go.Scatter(x=[-ew, ew, ew*1.3, -ew*1.3, -ew], y=[t1, t1, t1+2, t1+2, t1], fill="toself", fillcolor='rgba(200,200,200,0.6)', name="Top Tip"))
+    sorpas_fig.add_trace(go.Scatter(x=[-ew, ew, ew*1.3, -ew*1.3, -ew], y=[-t2, -t2, -t2-2, -t2-2, -t2], fill="toself", fillcolor='rgba(200,200,200,0.6)', name="Bottom Tip"))
 
-    report_data = {
-        "Parameter": ["Ply 1 Material", "Ply 1 Thick", "Ply 2 Material", "Ply 2 Thick", 
-                      "Ply 3 Material", "Ply 3 Thick", "Total Thickness", 
-                      "Effective k-factor", "Max CE", "Weldability Risk"],
-        "Value": [mat1, t1, mat2, t2, mat3_choice, t3, total_t, k_final, max_ce, risk_level]
-    }
-    df = pd.DataFrame(report_data)
-    csv = df.to_csv(index=False).encode('utf-8')
+    if calc_dia > 0.1:
+        r_nugget = calc_dia / 2.0
+        h_penetration = (total_t * 0.75) / 2.0
+        mid_y = (t1 - t2) / 2.0
+        theta = np.linspace(0, 2*np.pi, 100)
+        
+        n_color = 'rgba(255, 0, 0, 0.85)' if calc_dia >= calc_expulsion else 'rgba(148, 0, 211, 0.85)'
+        # Heat Affected Zone Mapping
+        sorpas_fig.add_trace(go.Scatter(x=r_nugget*1.25*np.cos(theta), y=mid_y + h_penetration*1.15*np.sin(theta), fill="toself", fillcolor='rgba(255,140,0,0.3)', name="HAZ"))
+        # Core Liquid Pool Fusion Zone
+        sorpas_fig.add_trace(go.Scatter(x=r_nugget*np.cos(theta), y=mid_y + h_penetration*np.sin(theta), fill="toself", fillcolor=n_color, line=dict(color='yellow'), name="Weld Pool"))
 
-    st.download_button(
-        label="📥 Download Results (CSV)",
-        data=csv,
-        file_name="weld_analysis_report.csv",
-        mime="text/csv",
-    )
+    sorpas_fig.update_layout(title=f"SORPAS Simulation (Java Core Engine)", template="plotly_dark", height=500, yaxis=dict(scaleanchor="x", scaleratio=1))
+
+# --- SCREEN PACKAGING ---
+if graph_mode == "Complete 3D Volumetric Lobe":
+    col1, col2 = st.columns([3, 1])
+    with col1: st.plotly_chart(fig, use_container_width=True)
+    with col2:
+        st.subheader("Weldability Matrix")
+        st.metric("Total Stack", f"{round(total_t,2)}mm")
+        st.metric("Min Target Dia", f"{round(target_min,2)}mm")
+else:
+    col1, col2 = st.columns([1, 1])
+    with col1: st.plotly_chart(fig, use_container_width=True)
+    with col2: st.plotly_chart(sorpas_fig, use_container_width=True)
+    st.divider()
+    m1, m2, m3 = st.columns(3)
+    m1.metric("Java Nugget Size", f"{round(calc_dia,3)} mm")
+    m2.metric("Min Limit", f"{round(target_min,2)} mm")
+    m3.metric("Expulsion Bound", f"{round(calc_expulsion,2)} mm")
