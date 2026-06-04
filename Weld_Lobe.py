@@ -3,7 +3,6 @@ import streamlit as st
 import numpy as np
 import plotly.graph_objects as go
 import streamlit.components.v1 as components
-import json
 
 # --- CONFIGURATION ---
 st.set_page_config(page_title="Asari-Rashidi SORPAS Time-Sim", layout="wide")
@@ -122,7 +121,7 @@ else:
         fig.add_trace(go.Scatter(x=[active_current], y=[active_force], mode='markers', marker=dict(color='white', size=12, symbol='cross'), name='Operating Point'))
         fig.update_layout(xaxis_title="Current (A)", yaxis_title="Force (kg)", template="plotly_dark", height=500, legend=dict(yanchor="top", y=0.99, xanchor="left", x=0.01))
 
-    # --- IN-BROWSER TRANSIENT ENGINE EMBED (THERMAL GRADIENT ENGINE EDITION) ---
+    # --- IN-BROWSER TRANSIENT ENGINE EMBED ---
     canvas_html = """
     <div style="background-color: #111111; padding: 15px; border-radius: 8px; font-family: sans-serif; color: white; box-sizing: border-box; height: 530px;">
         <h4 style="margin-top: 0; margin-bottom: 12px; color: #E0E0E0; font-size: 15px;">Transient Nugget Thermal Development Map</h4>
@@ -214,11 +213,9 @@ else:
             
             const dia = data.diameter;
             const expulsion = data.expulsion;
-            
-            // Calculate progress scale (0 to 1) for the thermal diffusion curves
             const thermalProgress = data.cycle / maxTime;
 
-            # --- 1. BASE MATERIAL COLD PANELS ---
+            // --- 1. BASE MATERIAL PLIES ---
             ctx.fillStyle = 'rgba(100, 149, 237, 0.25)';
             ctx.strokeStyle = 'rgba(100, 149, 237, 0.7)';
             ctx.lineWidth = 1.5;
@@ -230,12 +227,10 @@ else:
             ctx.fillRect(centerX - wBox/2, centerY, wBox, h2);
             ctx.strokeRect(centerX - wBox/2, centerY, wBox, h2);
 
-            # --- 2. ELECTRODES WITH TRANSIENT CONDUCTIVE GRADIENTS ---
-            // Top Tip Thermal Layer
+            // --- 2. ELECTRODES TRANSIENT HEAT GRADIENTS ---
             let topGrad = ctx.createLinearGradient(centerX, centerY - h1, centerX, centerY - h1 - 40);
             if (dia > 0) {
-                // As nugget grows, contact zone turns orange-red, driving heat conduction upward
-                let tipHeatColor = `rgba(${Math.floor(200 + 55 * thermalProgress)}, ${Math.floor(69 + 40 * thermalProgress)}, 0, 0.85)`;
+                let tipHeatColor = "rgba(" + Math.floor(200 + 55 * thermalProgress) + ", " + Math.floor(69 + 40 * thermalProgress) + ", 0, 0.85)";
                 topGrad.addColorStop(0, tipHeatColor);
                 topGrad.addColorStop(0.35 * thermalProgress, 'rgba(180, 70, 30, 0.8)');
                 topGrad.addColorStop(1, 'rgba(180, 180, 180, 0.85)');
@@ -252,10 +247,9 @@ else:
             ctx.closePath();
             ctx.fill();
 
-            // Bottom Tip Thermal Layer
             let botGrad = ctx.createLinearGradient(centerX, centerY + h2, centerX, centerY + h2 + 40);
             if (dia > 0) {
-                let tipHeatColor = `rgba(${Math.floor(200 + 55 * thermalProgress)}, ${Math.floor(69 + 40 * thermalProgress)}, 0, 0.85)`;
+                let tipHeatColor = "rgba(" + Math.floor(200 + 55 * thermalProgress) + ", " + Math.floor(69 + 40 * thermalProgress) + ", 0, 0.85)";
                 botGrad.addColorStop(0, tipHeatColor);
                 botGrad.addColorStop(0.35 * thermalProgress, 'rgba(180, 70, 30, 0.8)');
                 botGrad.addColorStop(1, 'rgba(180, 180, 180, 0.85)');
@@ -272,30 +266,25 @@ else:
             ctx.closePath();
             ctx.fill();
 
-            # --- 3. DYNAMIC THERMAL NUGGET MOLTEN GRADIENT ---
+            // --- 3. DYNAMIC MOLTEN ZONE RADIANT GRAPH ---
             if (dia > 0.05) {
                 const rNugget = (dia / 2) * scale;
                 const penetrationProgress = Math.min(1.0, 0.4 + (data.cycle / maxTime) * 0.6);
                 const hPenetration = (((t1 + t2) * 0.78) / 2) * scale * penetrationProgress;
 
-                // HAZ Boundary (Outer Heat Field Envelope)
                 ctx.fillStyle = 'rgba(255, 140, 0, 0.22)';
                 ctx.beginPath();
                 ctx.ellipse(centerX, centerY, rNugget * 1.28, hPenetration * 1.15, 0, 0, 2 * Math.PI);
                 ctx.fill();
 
-                // Core Weld Pool Radial Heat Distribution Map
                 let poolGrad = ctx.createRadialGradient(centerX, centerY, rNugget * 0.1, centerX, centerY, rNugget);
-                
                 if (dia >= expulsion) {
-                    // Critical Expulsion State Color Signature (White hot core transitioning out to volatile red-orange)
                     poolGrad.addColorStop(0, '#ffffff');
                     poolGrad.addColorStop(0.2, '#ffff00');
                     poolGrad.addColorStop(0.6, '#ff0000');
                     poolGrad.addColorStop(1, 'rgba(139, 0, 0, 0.9)');
                     ctx.strokeStyle = '#ff0000';
                 } else {
-                    // Stable Thermal Growth Profile (Melted yellow/white core bleeding out to deep molten purple)
                     poolGrad.addColorStop(0, '#ffffff');
                     poolGrad.addColorStop(0.25, '#ffcc00');
                     poolGrad.addColorStop(0.65, '#9400d3');
@@ -318,11 +307,11 @@ else:
             if (!isPlaying) return;
             currentFrameIndex++;
             
-            // SINGLE-PLAY CRITICAL BOUNDARY LIFECYCLE CONTROLLER
+            // SINGLE LOOP BRAKING SYSTEM
             if (currentFrameIndex >= simData.length) {
-                isPlaying = false; // Stop playback
+                isPlaying = false;
                 if (animationTimer) clearTimeout(animationTimer);
-                return; // Cease execution immediately without looping back
+                return;
             }
             
             drawFrame(currentFrameIndex);
@@ -331,7 +320,6 @@ else:
 
         function startSimulationPlayback() {
             if (!isPlaying) {
-                // If timeline reached the end, reset back to frame 0 for a clean replay loop on tap
                 if (currentFrameIndex >= simData.length - 1) {
                     currentFrameIndex = 0;
                 }
@@ -358,7 +346,7 @@ else:
         
     st.divider()
     
-    # Lower Dashboard Calculations
+    # Dashboard Metrics
     tip_eff_calc = (6.0 / d_tip)**2
     final_dia_calc = k_approx * ((active_current * tip_eff_calc)/10000)**2 * (active_time/10) * (300/active_force)**0.25 * 5.5
     expulsion_threshold_calc = (5.5 * np.sqrt(t_min)) * (active_force / 300)**0.1 * (d_tip / 6.0)**0.2
