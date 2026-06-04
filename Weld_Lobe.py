@@ -122,13 +122,36 @@ else:
         fig.add_trace(go.Scatter(x=[active_current], y=[active_force], mode='markers', marker=dict(color='white', size=12, symbol='cross'), name='Operating Point'))
         fig.update_layout(xaxis_title="Current (A)", yaxis_title="Force (kg)", template="plotly_dark", height=500, legend=dict(yanchor="top", y=0.99, xanchor="left", x=0.01))
 
-    # --- IN-BROWSER TRANSIENT ENGINE EMBED ---
+    # --- IN-BROWSER TRANSIENT ENGINE EMBED (WITH ADDED CONFIGURATION LEGEND) ---
     canvas_html = """
-    <div style="background-color: #111111; padding: 15px; border-radius: 8px; font-family: sans-serif; color: white; box-sizing: border-box; height: 500px;">
+    <div style="background-color: #111111; padding: 15px; border-radius: 8px; font-family: sans-serif; color: white; box-sizing: border-box; height: 530px;">
         <h4 style="margin-top: 0; margin-bottom: 12px; color: #E0E0E0; font-size: 15px;">Transient Nugget Thermal Development Map</h4>
-        <canvas id="weldCanvas" width="540" height="360" style="background-color: #1e1e1e; border: 1px solid #333; display: block; margin: 0 auto; border-radius: 4px;"></canvas>
+        <canvas id="weldCanvas" width="540" height="340" style="background-color: #1e1e1e; border: 1px solid #333; display: block; margin: 0 auto; border-radius: 4px;"></canvas>
         
-        <div style="margin-top: 20px; display: flex; gap: 12px; align-items: center; justify-content: center; height: 45px;">
+        <div style="margin-top: 12px; display: flex; flex-wrap: wrap; gap: 14px; justify-content: center; font-size: 11px; font-weight: 500; color: #BBBBBB; padding: 2px 5px;">
+            <div style="display: flex; align-items: center; gap: 5px;">
+                <span style="display: inline-block; width: 14px; height: 10px; background-color: rgba(100, 149, 237, 0.25); border: 1px solid rgba(100, 149, 237, 0.7); border-radius: 2px;"></span>
+                <span>Top Ply (""" + str(mat1.split(" ")[0]) + """)</span>
+            </div>
+            <div style="display: flex; align-items: center; gap: 5px;">
+                <span style="display: inline-block; width: 14px; height: 10px; background-color: rgba(144, 238, 144, 0.25); border: 1px solid rgba(144, 238, 144, 0.7); border-radius: 2px;"></span>
+                <span>Bottom Ply (""" + str(mat2.split(" ")[0]) + """)</span>
+            </div>
+            <div style="display: flex; align-items: center; gap: 5px;">
+                <span style="display: inline-block; width: 14px; height: 10px; background-color: rgba(180, 180, 180, 0.75); border-radius: 2px;"></span>
+                <span>Electrode Tips</span>
+            </div>
+            <div style="display: flex; align-items: center; gap: 5px;">
+                <span style="display: inline-block; width: 14px; height: 10px; background-color: rgba(255, 140, 0, 0.22); border-radius: 2px;"></span>
+                <span style="color: #ff8c00;">HAZ Boundary</span>
+            </div>
+            <div style="display: flex; align-items: center; gap: 5px;">
+                <span style="display: inline-block; width: 14px; height: 10px; background-color: rgba(148, 0, 211, 0.85); border: 1px solid #ffff00; border-radius: 2px;"></span>
+                <span style="color: #df42ff;">Weld Nugget Pool</span>
+            </div>
+        </div>
+
+        <div style="margin-top: 15px; display: flex; gap: 12px; align-items: center; justify-content: center; height: 45px;">
             <button onclick="startSimulationPlayback()" style="background-color: #007bff; color: white; border: none; padding: 10px 20px; border-radius: 4px; cursor: pointer; font-weight: bold; font-size: 13px;">▶ Play Growth</button>
             <button onclick="stopSimulationPlayback()" style="background-color: #6c757d; color: white; border: none; padding: 10px 20px; border-radius: 4px; cursor: pointer; font-weight: bold; font-size: 13px;">⏸ Pause</button>
             <span id="cycleLabel" style="font-size: 14px; color: #00ffff; margin-left: 10px; font-family: monospace; font-weight: bold; min-width: 180px;">Ready</span>
@@ -136,7 +159,6 @@ else:
     </div>
 
     <script>
-        // Directly capture variables from Streamlit pipeline without background cross-origin bridge requests
         const t1 = """ + str(t1) + """;
         const t2 = """ + str(t2) + """;
         const dTip = """ + str(d_tip) + """;
@@ -154,7 +176,6 @@ else:
         let animationTimer = null;
         let simData = [];
 
-        // GENERATE TRANSIENT TIMELINE LOCALLY - Eliminates the Java sub-process communication bottleneck completely
         function computeTransientTimeline() {
             simData = [];
             const tipEff = Math.pow(6.0 / dTip, 2);
@@ -162,10 +183,7 @@ else:
             const expulsionThreshold = (5.5 * Math.sqrt(tMin)) * Math.pow(forceF / 300, 0.1) * Math.pow(dTip / 6.0, 0.2);
 
             for (let c = 1; c <= maxTime; c++) {
-                // Parabolic physical transient growth rate signature matching transient resistance equations
                 let transientDiameter = kApprox * Math.pow((currentI * tipEff) / 10000, 2) * (c / 10) * Math.pow(300 / forceF, 0.25) * 5.5;
-                
-                // Add physical simulation boundary conditions
                 if (transientDiameter < 0.1) transientDiameter = 0.0;
                 
                 simData.push({
@@ -207,7 +225,7 @@ else:
             ctx.fillRect(centerX - wBox/2, centerY, wBox, h2);
             ctx.strokeRect(centerX - wBox/2, centerY, wBox, h2);
 
-            // Electrode Geometry Masks - Placed clean flush against surface edges
+            // Electrode Geometry Masks
             ctx.fillStyle = 'rgba(180, 180, 180, 0.75)';
             
             // Top Electrode
@@ -280,7 +298,6 @@ else:
             if (animationTimer) clearTimeout(animationTimer);
         }
 
-        // Initialize and display frame 0 immediately
         computeTransientTimeline();
         drawFrame(0);
     </script>
@@ -290,11 +307,12 @@ else:
     with col1: 
         st.plotly_chart(fig, use_container_width=True)
     with col2: 
-        components.html(canvas_html, height=560)
+        # Bumped up height marginally to comfortably nestle the legend rows
+        components.html(canvas_html, height=590)
         
     st.divider()
     
-    # Calculate values natively to update lower dashboard cards instantly
+    # Static lower deck metric validation variables
     tip_eff_calc = (6.0 / d_tip)**2
     final_dia_calc = k_approx * ((active_current * tip_eff_calc)/10000)**2 * (active_time/10) * (300/active_force)**0.25 * 5.5
     expulsion_threshold_calc = (5.5 * np.sqrt(t_min)) * (active_force / 300)**0.1 * (d_tip / 6.0)**0.2
