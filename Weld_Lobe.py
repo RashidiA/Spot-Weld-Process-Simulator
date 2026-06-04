@@ -162,20 +162,21 @@ else:
         fig.add_trace(go.Scatter(x=[active_current], y=[active_force], mode='markers', marker=dict(color='white', size=12, symbol='cross'), name='Operating Point'))
         fig.update_layout(xaxis_title="Current (A)", yaxis_title="Force (kg)", template="plotly_dark", height=500, legend=dict(yanchor="top", y=0.99, xanchor="left", x=0.01))
 
-    # --- ADVANCED NATIVE HTML5 CANVAS EMBED (STABLE PARSING SETUP) ---
+    # --- ADVANCED NATIVE HTML5 CANVAS EMBED ---
     canvas_html = """
-    <div style="background-color: #111111; padding: 15px; border-radius: 8px; font-family: sans-serif; color: white; box-sizing: border-box; height: 490px;">
+    <div style="background-color: #111111; padding: 15px; border-radius: 8px; font-family: sans-serif; color: white; box-sizing: border-box; height: 500px;">
         <h4 style="margin-top: 0; margin-bottom: 12px; color: #E0E0E0; font-size: 15px;">Transient Nugget Thermal Development Map</h4>
         <canvas id="weldCanvas" width="540" height="360" style="background-color: #1e1e1e; border: 1px solid #333; display: block; margin: 0 auto; border-radius: 4px;"></canvas>
         
-        <div style="margin-top: 15px; display: flex; gap: 12px; align-items: center; justify-content: center; height: 45px;">
+        <div style="margin-top: 20px; display: flex; gap: 12px; align-items: center; justify-content: center; height: 45px; padding-bottom: 5px;">
             <button onclick="startSimulationPlayback()" style="background-color: #007bff; color: white; border: none; padding: 10px 20px; border-radius: 4px; cursor: pointer; font-weight: bold; font-size: 13px;">▶ Play Growth</button>
             <button onclick="stopSimulationPlayback()" style="background-color: #6c757d; color: white; border: none; padding: 10px 20px; border-radius: 4px; cursor: pointer; font-weight: bold; font-size: 13px;">⏸ Pause</button>
-            <span id="cycleLabel" style="font-size: 14px; color: #00ffff; margin-left: 10px; font-family: monospace; font-weight: bold; min-width: 180px;">Loading engine...</span>
+            <span id="cycleLabel" style="font-size: 14px; color: #00ffff; margin-left: 10px; font-family: monospace; font-weight: bold; min-width: 180px;">Ready</span>
         </div>
     </div>
 
     <script>
+        // Data block injected cleanly via python string operations
         const simData = """ + json.dumps(simulation_timeline) + """;
         const t1 = """ + str(t1) + """;
         const t2 = """ + str(t2) + """;
@@ -189,6 +190,14 @@ else:
         let isPlaying = false;
         let animationTimer = null;
 
+        // STATE LIFECYCLE RE-ANCHOR: Force absolute reset if parameters shift
+        function resetSimulationLifecycle() {
+            isPlaying = false;
+            if (animationTimer) clearTimeout(animationTimer);
+            currentFrameIndex = 0;
+            drawFrame(0);
+        }
+
         function drawFrame(index) {
             if (index < 0) index = 0;
             if (index >= simData.length) index = simData.length - 1;
@@ -200,10 +209,10 @@ else:
             const centerY = canvas.height / 2;
             const scale = 38; 
             
-            const wBox = dTip * 2.5 * scale;
+            const wBox = dTip * 2.8 * scale;
             const h1 = t1 * scale;
             const h2 = t2 * scale;
-            const tipW = (dTip / 2) * scale;
+            const tipRadiusX = (dTip / 2) * scale;
 
             // Sheet 1 (Top Layer)
             ctx.fillStyle = 'rgba(100, 149, 237, 0.25)';
@@ -218,24 +227,26 @@ else:
             ctx.fillRect(centerX - wBox/2, centerY, wBox, h2);
             ctx.strokeRect(centerX - wBox/2, centerY, wBox, h2);
 
-            // Curved Electrode Profile - Genuine SORPAS Geometry Mapping
-            ctx.fillStyle = 'rgba(180, 180, 180, 0.7)';
+            // RECALIBRATED GEOMETRY: Prevents cross-sheet penetration bounds
+            ctx.fillStyle = 'rgba(180, 180, 180, 0.75)';
             
-            // Top Electrode
+            // Top Electrode Contour
             ctx.beginPath();
-            ctx.moveTo(centerX - tipW, centerY - h1);
-            ctx.arc(centerX, centerY - h1 - tipW * 1.5, tipW * 1.8, 0.6 * Math.PI, 0.4 * Math.PI, true);
-            ctx.lineTo(centerX + tipW * 1.25, centerY - h1 - 35);
-            ctx.lineTo(centerX - tipW * 1.25, centerY - h1 - 35);
+            ctx.moveTo(centerX - tipRadiusX, centerY - h1); // Flat contact point starts exactly at sheet top edge
+            ctx.lineTo(centerX + tipRadiusX, centerY - h1); // Flat contact length governed by d_tip input
+            ctx.bezierCurveTo(centerX + tipRadiusX * 1.4, centerY - h1 - 5, centerX + tipRadiusX * 1.6, centerY - h1 - 25, centerX + tipRadiusX * 1.8, centerY - h1 - 40);
+            ctx.lineTo(centerX - tipRadiusX * 1.8, centerY - h1 - 40);
+            ctx.bezierCurveTo(centerX - tipRadiusX * 1.6, centerY - h1 - 25, centerX - tipRadiusX * 1.4, centerY - h1 - 5, centerX - tipRadiusX, centerY - h1);
             ctx.closePath();
             ctx.fill();
 
-            // Bottom Electrode
+            // Bottom Electrode Contour
             ctx.beginPath();
-            ctx.moveTo(centerX - tipW, centerY + h2);
-            ctx.arc(centerX, centerY + h2 + tipW * 1.5, tipW * 1.8, 1.4 * Math.PI, 1.6 * Math.PI, false);
-            ctx.lineTo(centerX + tipW * 1.25, centerY + h2 + 35);
-            ctx.lineTo(centerX - tipW * 1.25, centerY + h2 + 35);
+            ctx.moveTo(centerX - tipRadiusX, centerY + h2); // Flat contact point starts exactly at sheet bottom edge
+            ctx.lineTo(centerX + tipRadiusX, centerY + h2);
+            ctx.bezierCurveTo(centerX + tipRadiusX * 1.4, centerY + h2 + 5, centerX + tipRadiusX * 1.6, centerY + h2 + 25, centerX + tipRadiusX * 1.8, centerY + h2 + 40);
+            ctx.lineTo(centerX - tipRadiusX * 1.8, centerY + h2 + 40);
+            ctx.bezierCurveTo(centerX - tipRadiusX * 1.6, centerY + h2 + 25, centerX - tipRadiusX * 1.4, centerY + h2 + 5, centerX - tipRadiusX, centerY + h2);
             ctx.closePath();
             ctx.fill();
 
@@ -246,12 +257,12 @@ else:
             if (dia > 0.05) {
                 const rNugget = (dia / 2) * scale;
                 const penetrationProgress = Math.min(1.0, 0.4 + (data.cycle / maxTime) * 0.6);
-                const hPenetration = (((t1 + t2) * 0.75) / 2) * scale * penetrationProgress;
+                const hPenetration = (((t1 + t2) * 0.78) / 2) * scale * penetrationProgress;
 
                 // Heat Affected Zone (HAZ Boundary)
-                ctx.fillStyle = 'rgba(255, 140, 0, 0.25)';
+                ctx.fillStyle = 'rgba(255, 140, 0, 0.22)';
                 ctx.beginPath();
-                ctx.ellipse(centerX, centerY, rNugget * 1.25, hPenetration * 1.15, 0, 0, 2 * Math.PI);
+                ctx.ellipse(centerX, centerY, rNugget * 1.28, hPenetration * 1.15, 0, 0, 2 * Math.PI);
                 ctx.fill();
 
                 // Core Molten Metal Pool 
@@ -264,7 +275,6 @@ else:
                 ctx.stroke();
             }
 
-            // Standard JS Concatenation ensures Python never raises formatting errors here
             document.getElementById('cycleLabel').innerText = "Cycle: " + data.cycle + " / " + maxTime + " (" + dia.toFixed(2) + " mm)";
         }
 
@@ -275,7 +285,7 @@ else:
                 currentFrameIndex = 0; 
             }
             drawFrame(currentFrameIndex);
-            animationTimer = setTimeout(playbackLoop, 110);
+            animationTimer = setTimeout(playbackLoop, 120);
         }
 
         function startSimulationPlayback() {
@@ -290,7 +300,8 @@ else:
             if (animationTimer) clearTimeout(animationTimer);
         }
 
-        drawFrame(0);
+        // Initialize state handler
+        resetSimulationLifecycle();
     </script>
     """
 
@@ -298,8 +309,8 @@ else:
     with col1: 
         st.plotly_chart(fig, use_container_width=True)
     with col2: 
-        # Generous frame display window allocation to avoid any button clipping
-        components.html(canvas_html, height=560)
+        # Expanded component bounding region to provide clean structural spacing
+        components.html(canvas_html, height=580)
         
     st.divider()
     last_res = simulation_timeline[-1]
