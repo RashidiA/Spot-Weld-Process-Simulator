@@ -163,7 +163,6 @@ else:
         fig.update_layout(xaxis_title="Current (A)", yaxis_title="Force (kg)", template="plotly_dark", height=500, legend=dict(yanchor="top", y=0.99, xanchor="left", x=0.01))
 
     # --- ADVANCED NATIVE HTML5 CANVAS EMBED (STABLE PARSING SETUP) ---
-    # Separated from f-strings entirely to ensure absolute JavaScript reliability inside Streamlit
     canvas_html = """
     <div style="background-color: #111111; padding: 15px; border-radius: 8px; font-family: sans-serif; color: white; box-sizing: border-box; height: 490px;">
         <h4 style="margin-top: 0; margin-bottom: 12px; color: #E0E0E0; font-size: 15px;">Transient Nugget Thermal Development Map</h4>
@@ -181,7 +180,7 @@ else:
         const t1 = """ + str(t1) + """;
         const t2 = """ + str(t2) + """;
         const dTip = """ + str(d_tip) + """;
-        const maxTime = """ + str(active_time) + f""";
+        const maxTime = """ + str(active_time) + """;
         
         const canvas = document.getElementById('weldCanvas');
         const ctx = canvas.getContext('2d');
@@ -190,7 +189,7 @@ else:
         let isPlaying = false;
         let animationTimer = null;
 
-        function drawFrame(index) {{
+        function drawFrame(index) {
             if (index < 0) index = 0;
             if (index >= simData.length) index = simData.length - 1;
             const data = simData[index];
@@ -244,7 +243,7 @@ else:
             const dia = data.diameter;
             const expulsion = data.expulsion;
 
-            if (dia > 0.05) {{
+            if (dia > 0.05) {
                 const rNugget = (dia / 2) * scale;
                 const penetrationProgress = Math.min(1.0, 0.4 + (data.cycle / maxTime) * 0.6);
                 const hPenetration = (((t1 + t2) * 0.75) / 2) * scale * penetrationProgress;
@@ -263,32 +262,33 @@ else:
                 ctx.ellipse(centerX, centerY, rNugget, hPenetration, 0, 0, 2 * Math.PI);
                 ctx.fill();
                 ctx.stroke();
-            }}
+            }
 
-            document.getElementById('cycleLabel').innerText = `Cycle: ${data.cycle} / ${maxTime} (${dia.toFixed(2)} mm)`;
-        }}
+            // Standard JS Concatenation ensures Python never raises formatting errors here
+            document.getElementById('cycleLabel').innerText = "Cycle: " + data.cycle + " / " + maxTime + " (" + dia.toFixed(2) + " mm)";
+        }
 
-        function playbackLoop() {{
+        function playbackLoop() {
             if (!isPlaying) return;
             currentFrameIndex++;
-            if (currentFrameIndex >= simData.length) {{
+            if (currentFrameIndex >= simData.length) {
                 currentFrameIndex = 0; 
-            }}
+            }
             drawFrame(currentFrameIndex);
             animationTimer = setTimeout(playbackLoop, 110);
-        }}
+        }
 
-        function startSimulationPlayback() {{
-            if (!isPlaying) {{
+        function startSimulationPlayback() {
+            if (!isPlaying) {
                 isPlaying = true;
                 playbackLoop();
-            }}
-        }}
+            }
+        }
 
-        function stopSimulationPlayback() {{
+        function stopSimulationPlayback() {
             isPlaying = false;
             if (animationTimer) clearTimeout(animationTimer);
-        }}
+        }
 
         drawFrame(0);
     </script>
@@ -298,7 +298,7 @@ else:
     with col1: 
         st.plotly_chart(fig, use_container_width=True)
     with col2: 
-        # Stable window padding height allocation
+        # Generous frame display window allocation to avoid any button clipping
         components.html(canvas_html, height=560)
         
     st.divider()
