@@ -162,19 +162,21 @@ else:
         fig.add_trace(go.Scatter(x=[active_current], y=[active_force], mode='markers', marker=dict(color='white', size=12, symbol='cross'), name='Operating Point'))
         fig.update_layout(xaxis_title="Current (A)", yaxis_title="Force (kg)", template="plotly_dark", height=500, legend=dict(yanchor="top", y=0.99, xanchor="left", x=0.01))
 
-    # --- NATIVE GRAPHICS ENGINE INTERACTION INJECTOR ---
+    # --- ADVANCED NATIVE HTML5 CANVAS EMBED (WITH FIXES) ---
     canvas_html = f"""
-    <div style="background-color: #111111; padding: 15px; border-radius: 8px; font-family: sans-serif; color: white;">
-        <h4 style="margin-top: 0; color: #E0E0E0;">Transient Nugget Thermal Development Map</h4>
-        <canvas id="weldCanvas" width="550" height="350" style="background-color: #1e1e1e; border: 1px solid #333; display: block; margin: 0 auto;"></canvas>
-        <div style="margin-top: 15px; display: flex; gap: 10px; align-items: center; justify-content: center;">
-            <button id="playBtn" style="background-color: #007bff; color: white; border: none; padding: 8px 16px; border-radius: 4px; cursor: pointer; font-weight: bold;">▶ Play Growth</button>
-            <button id="pauseBtn" style="background-color: #6c757d; color: white; border: none; padding: 8px 16px; border-radius: 4px; cursor: pointer; font-weight: bold;">⏸ Pause</button>
-            <span id="cycleLabel" style="font-size: 14px; color: #00ffff; margin-left: 10px; font-family: monospace;">Cycle: 0 / 0</span>
+    <div style="background-color: #111111; padding: 15px; border-radius: 8px; font-family: sans-serif; color: white; box-sizing: border-box; height: 490px;">
+        <h4 style="margin-top: 0; margin-bottom: 12px; color: #E0E0E0; font-size: 15px;">Transient Nugget Thermal Development Map</h4>
+        <canvas id="weldCanvas" width="540" height="360" style="background-color: #1e1e1e; border: 1px solid #333; display: block; margin: 0 auto; border-radius: 4px;"></canvas>
+        
+        <div style="margin-top: 15px; display: flex; gap: 12px; align-items: center; justify-content: center; height: 45px;">
+            <button onclick="startSimulationPlayback()" style="background-color: #007bff; color: white; border: none; padding: 10px 20px; border-radius: 4px; cursor: pointer; font-weight: bold; font-size: 13px;">▶ Play Growth</button>
+            <button onclick="stopSimulationPlayback()" style="background-color: #6c757d; color: white; border: none; padding: 10px 20px; border-radius: 4px; cursor: pointer; font-weight: bold; font-size: 13px;">⏸ Pause</button>
+            <span id="cycleLabel" style="font-size: 14px; color: #00ffff; margin-left: 10px; font-family: monospace; font-weight: bold; min-width: 180px;">Cycle: 1 / {active_time} (0.00 mm)</span>
         </div>
     </div>
 
     <script>
+        // Inject compiled dataset from python backend
         const simData = {json.dumps(simulation_timeline)};
         const t1 = {t1};
         const t2 = {t2};
@@ -189,73 +191,74 @@ else:
         let animationTimer = null;
 
         function drawFrame(index) {{
+            if (index < 0) index = 0;
             if (index >= simData.length) index = simData.length - 1;
             const data = simData[index];
             
-            // Clear Frame
+            // Wipe working buffer context frame
             ctx.clearRect(0, 0, canvas.width, canvas.height);
             
-            // Center Transformations Coordinate Mapping
             const centerX = canvas.width / 2;
             const centerY = canvas.height / 2;
-            const scale = 35; // Pixels per mm
+            const scale = 38; 
             
             const wBox = dTip * 2.5 * scale;
             const h1 = t1 * scale;
             const h2 = t2 * scale;
             const tipW = (dTip / 2) * scale;
 
-            // 1. Draw Sheet 1 (Top)
-            ctx.fillStyle = 'rgba(100, 149, 237, 0.35)';
-            ctx.strokeStyle = 'rgba(100, 149, 237, 0.8)';
+            // Sheet 1 (Top Layer Profile)
+            ctx.fillStyle = 'rgba(100, 149, 237, 0.25)';
+            ctx.strokeStyle = 'rgba(100, 149, 237, 0.7)';
             ctx.lineWidth = 1.5;
             ctx.fillRect(centerX - wBox/2, centerY - h1, wBox, h1);
             ctx.strokeRect(centerX - wBox/2, centerY - h1, wBox, h1);
 
-            // 2. Draw Sheet 2 (Bottom)
-            ctx.fillStyle = 'rgba(144, 238, 144, 0.35)';
-            ctx.strokeStyle = 'rgba(144, 238, 144, 0.8)';
+            // Sheet 2 (Bottom Layer Profile)
+            ctx.fillStyle = 'rgba(144, 238, 144, 0.25)';
+            ctx.strokeStyle = 'rgba(144, 238, 144, 0.7)';
             ctx.fillRect(centerX - wBox/2, centerY, wBox, h2);
             ctx.strokeRect(centerX - wBox/2, centerY, wBox, h2);
 
-            // 3. Draw Copper Electrode Tip (Top)
-            ctx.fillStyle = 'rgba(200, 200, 200, 0.7)';
+            // Curved Electrode Profile - Matching genuine SORPAS geometry patterns
+            ctx.fillStyle = 'rgba(180, 180, 180, 0.7)';
+            
+            // Top Electrode
             ctx.beginPath();
             ctx.moveTo(centerX - tipW, centerY - h1);
-            ctx.lineTo(centerX + tipW, centerY - h1);
-            ctx.lineTo(centerX + tipW * 1.3, centerY - h1 - 40);
-            ctx.lineTo(centerX - tipW * 1.3, centerY - h1 - 40);
+            ctx.arc(centerX, centerY - h1 - tipW * 1.5, tipW * 1.8, 0.6 * Math.PI, 0.4 * Math.PI, true);
+            ctx.lineTo(centerX + tipW * 1.25, centerY - h1 - 35);
+            ctx.lineTo(centerX - tipW * 1.25, centerY - h1 - 35);
             ctx.closePath();
             ctx.fill();
 
-            // 4. Draw Copper Electrode Tip (Bottom)
+            // Bottom Electrode
             ctx.beginPath();
             ctx.moveTo(centerX - tipW, centerY + h2);
-            ctx.lineTo(centerX + tipW, centerY + h2);
-            ctx.lineTo(centerX + tipW * 1.3, centerY + h2 + 40);
-            ctx.lineTo(centerX - tipW * 1.3, centerY + h2 + 40);
+            ctx.arc(centerX, centerY + h2 + tipW * 1.5, tipW * 1.8, 1.4 * Math.PI, 1.6 * Math.PI, false);
+            ctx.lineTo(centerX + tipW * 1.25, centerY + h2 + 35);
+            ctx.lineTo(centerX - tipW * 1.25, centerY + h2 + 35);
             ctx.closePath();
             ctx.fill();
 
-            // 5. Draw Dynamic Thermal Growth (HAZ & Molten Pool)
+            // Dynamic Core Weld Computation Layer
             const dia = data.diameter;
             const expulsion = data.expulsion;
 
-            if (dia > 0.1) {{
+            if (dia > 0.05) {{
                 const rNugget = (dia / 2) * scale;
-                const midY = centerY + ((h1 - h2) / 2) - (h1/2);
                 
-                // Progressive vertical penetration factor based on calculation cycles
+                // Penetration sizing index
                 const penetrationProgress = Math.min(1.0, 0.4 + (data.cycle / maxTime) * 0.6);
                 const hPenetration = (((t1 + t2) * 0.75) / 2) * scale * penetrationProgress;
 
-                // Heat Affected Zone (HAZ) Outward Layer Expansion
-                ctx.fillStyle = 'rgba(255, 140, 0, 0.3)';
+                // Heat Affected Zone (HAZ Boundary)
+                ctx.fillStyle = 'rgba(255, 140, 0, 0.25)';
                 ctx.beginPath();
                 ctx.ellipse(centerX, centerY, rNugget * 1.25, hPenetration * 1.15, 0, 0, 2 * Math.PI);
                 ctx.fill();
 
-                // Core Molten Weld Pool
+                // Core Molten Metal Pool 
                 ctx.fillStyle = (dia >= expulsion) ? 'rgba(255, 0, 0, 0.85)' : 'rgba(148, 0, 211, 0.85)';
                 ctx.strokeStyle = '#ffff00';
                 ctx.lineWidth = 2;
@@ -265,33 +268,33 @@ else:
                 ctx.stroke();
             }}
 
-            // Update Track UI Counter Text String
-            document.getElementById('cycleLabel').innerText = `Cycle: ${{data.cycle}} / ${{maxTime}} (${{dia.toFixed(2)}} mm)`;
+            // Corrected JS string parsing tokens (escaped with backslashes to block python parser substitution)
+            document.getElementById('cycleLabel').innerText = `Cycle: \${data.cycle} / \${maxTime} (\${dia.toFixed(2)} mm)`;
         }}
 
-        function tick() {{
+        function playbackLoop() {{
             if (!isPlaying) return;
             currentFrameIndex++;
             if (currentFrameIndex >= simData.length) {{
-                currentFrameIndex = 0; // Loop play natively
+                currentFrameIndex = 0; 
             }}
             drawFrame(currentFrameIndex);
-            animationTimer = setTimeout(tick, 120);
+            animationTimer = setTimeout(playbackLoop, 110);
         }}
 
-        document.getElementById('playBtn').addEventListener('click', () => {{
+        function startSimulationPlayback() {{
             if (!isPlaying) {{
                 isPlaying = true;
-                tick();
+                playbackLoop();
             }}
-        }});
+        }}
 
-        document.getElementById('pauseBtn').addEventListener('click', () => {{
+        function stopSimulationPlayback() {{
             isPlaying = false;
             if (animationTimer) clearTimeout(animationTimer);
-        }});
+        }}
 
-        // Initialize display on load frame window loop
+        // Draw initial static state
         drawFrame(0);
     </script>
     """
@@ -300,7 +303,8 @@ else:
     with col1: 
         st.plotly_chart(fig, use_container_width=True)
     with col2: 
-        components.html(canvas_html, height=450)
+        # Expanded safe container bounding height to 550 to protect control elements
+        components.html(canvas_html, height=550)
         
     st.divider()
     last_res = simulation_timeline[-1]
