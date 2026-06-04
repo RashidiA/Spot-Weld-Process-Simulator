@@ -5,7 +5,6 @@ public class WeldEngine {
             return;
         }
 
-        // Parse inputs sent from the Streamlit UI
         double t1 = Double.parseDouble(args[0]);
         double resFactor1 = Double.parseDouble(args[1]);
         double kMod1 = Double.parseDouble(args[2]);
@@ -21,7 +20,6 @@ public class WeldEngine {
         int targetTime = (int) Double.parseDouble(args[10]);
         double force = Double.parseDouble(args[11]);
 
-        // Core Multi-Ply Calculations
         double totalT = t1 + t2;
         double tMin = Math.min(t1, t2);
         double avgRes = ((t1 * resFactor1) + (t2 * resFactor2)) / totalT;
@@ -34,7 +32,6 @@ public class WeldEngine {
         double tipEff = Math.pow(6.0 / dTip, 2.0);
         double expulsionLimit = (5.5 * Math.sqrt(tMin)) * Math.pow(force / 300.0, 0.1) * Math.pow(dTip / 6.0, 0.2);
 
-        // Build sequential time history string data
         StringBuilder output = new StringBuilder();
         for (int stepTime = 1; stepTime <= targetTime; stepTime++) {
             double nuggetDiameter = kFinal * Math.pow((current * tipEff) / 10000.0, 2.0) * (stepTime / 10.0) * Math.pow(300.0 / force, 0.25) * 5.5;
