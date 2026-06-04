@@ -5,18 +5,12 @@ import plotly.graph_objects as go
 import subprocess
 import os
 
-# ==============================================================================
 # --- AUTOMATIC JAVA COMPILATION ON CLOUD RUNTIME ---
-# This ensures that when GitHub deploys to Streamlit Cloud, the Java engine
-# compiles successfully on the Linux server without manual compilation steps.
-# ==============================================================================
 if not os.path.exists("WeldEngine.class"):
     try:
-        # Runs the Linux system Java compiler in the background
         subprocess.check_call(["javac", "WeldEngine.java"])
     except Exception as e:
         st.error(f"⚠️ Failed to compile WeldEngine.java: {e}")
-        st.info("Please verify that packages.txt contains 'default-jdk' and is placed at your repository root.")
 
 # --- CONFIGURATION ---
 st.set_page_config(page_title="Asari-Rashidi SORPAS Time-Sim", layout="wide")
@@ -116,9 +110,21 @@ if graph_mode == "Complete 3D Volumetric Lobe":
     
     fig = go.Figure(data=go.Isosurface(
         x=I.flatten(), y=T.flatten(), z=F.flatten(), value=nugget_growth.flatten(),
-        isomin=target_min, isomax=target_min*2.5, surface_count=3, colorscale='Plasma', opacity=0.4
+        isomin=target_min, isomax=target_min*2.5, surface_count=4, colorscale='Plasma', opacity=0.4,
+        colorbar_title="Dia (mm)"
     ))
-    st.plotly_chart(fig, use_container_width=True)
+    # CRITICAL UPDATE 1: Scaled layout workspace height property to 850 for a bigger graphic window view
+    fig.update_layout(
+        scene=dict(xaxis_title='Current (A)', yaxis_title='Time (Cycles)', zaxis_title='Force (kg)'),
+        margin=dict(l=0, r=0, b=0, t=40), height=850, template="plotly_dark"
+    )
+    
+    col1, col2 = st.columns([3, 1])
+    with col1: st.plotly_chart(fig, use_container_width=True)
+    with col2:
+        st.subheader("Weldability Matrix")
+        st.metric("Total Stack", f"{round(total_t,2)}mm")
+        st.metric("Min Target Dia", f"{round(target_min,2)}mm")
 
 else:
     simulation_timeline = fetch_transient_java_data(active_current, active_time, active_force)
@@ -126,21 +132,35 @@ else:
     k_approx = k_base * ((t1*m1_p["k_mod"] + t2*m2_p["k_mod"])/total_t) * ((t1*m1_p["res_factor"] + t2*m2_p["res_factor"])/total_t)
     if is_zinc: k_approx *= 0.82
     tip_eff = (6.0 / d_tip)**2
+    target_min = 4 * np.sqrt(t_min)
     
     if "X-Y Plane" in slice_plane:
         I_2d, T_2d = np.meshgrid(currents, times)
         nugget_growth_2d = k_approx * ((I_2d * tip_eff)/10000)**2 * (T_2d/10) * (300/slice_force)**0.25 * 5.5
+        exp_limit_2d = (5.5 * np.sqrt(t_min)) * (slice_force / 300)**0.1 * (d_tip / 6.0)**0.2
+
         fig = go.Figure()
-        fig.add_trace(go.Contour(x=currents, y=times, z=nugget_growth_2d, colorscale='Plasma'))
+        fig.add_trace(go.Contour(x=currents, y=times, z=nugget_growth_2d, colorscale='Plasma', colorbar=dict(title="Dia (mm)")))
+        # CRITICAL UPDATE 2: Restored safety threshold contours lines explicitly back onto the 2D plane graph
+        fig.add_trace(go.Contour(x=currents, y=times, z=nugget_growth_2d, showscale=False, contours_coloring='none',
+                                 contours=dict(start=target_min, end=target_min), line=dict(color='cyan', width=4), name='Min Target'))
+        fig.add_trace(go.Contour(x=currents, y=times, z=nugget_growth_2d, showscale=False, contours_coloring='none',
+                                 contours=dict(start=exp_limit_2d, end=exp_limit_2d), line=dict(color='red', width=4, dash='dash'), name='Expulsion Limit'))
         fig.add_trace(go.Scatter(x=[active_current], y=[active_time], mode='markers', marker=dict(color='white', size=12, symbol='cross'), name='Operating Point'))
-        fig.update_layout(xaxis_title="Current (A)", yaxis_title="Weld Time (Cycles)", template="plotly_dark", height=500)
+        fig.update_layout(xaxis_title="Current (A)", yaxis_title="Weld Time (Cycles)", template="plotly_dark", height=500, legend=dict(yanchor="top", y=0.99, xanchor="left", x=0.01))
     else:
         I_2d, F_2d = np.meshgrid(currents, forces)
         nugget_growth_2d = k_approx * ((I_2d * tip_eff)/10000)**2 * (slice_time/10) * (300/F_2d)**0.25 * 5.5
+        exp_limit_2d = (5.5 * np.sqrt(t_min)) * (F_2d / 300)**0.1 * (d_tip / 6.0)**0.2
+
         fig = go.Figure()
-        fig.add_trace(go.Contour(x=currents, y=forces, z=nugget_growth_2d, colorscale='Plasma'))
+        fig.add_trace(go.Contour(x=currents, y=forces, z=nugget_growth_2d, colorscale='Plasma', colorbar=dict(title="Dia (mm)")))
+        fig.add_trace(go.Contour(x=currents, y=forces, z=nugget_growth_2d, showscale=False, contours_coloring='none',
+                                 contours=dict(start=target_min, end=target_min), line=dict(color='cyan', width=4), name='Min Target'))
+        fig.add_trace(go.Contour(x=currents, y=forces, z=(nugget_growth_2d - exp_limit_2d), showscale=False, contours_coloring='none',
+                                 contours=dict(start=0, end=0), line=dict(color='red', width=4, dash='dash'), name='Expulsion Limit'))
         fig.add_trace(go.Scatter(x=[active_current], y=[active_force], mode='markers', marker=dict(color='white', size=12, symbol='cross'), name='Operating Point'))
-        fig.update_layout(xaxis_title="Current (A)", yaxis_title="Force (kg)", template="plotly_dark", height=500)
+        fig.update_layout(xaxis_title="Current (A)", yaxis_title="Force (kg)", template="plotly_dark", height=500, legend=dict(yanchor="top", y=0.99, xanchor="left", x=0.01))
 
     # --- TRANSIENT SORPAS ANIMATED COUPLING SYSTEM ---
     sorpas_fig = go.Figure()
@@ -155,6 +175,7 @@ else:
         go.Scatter(x=[-d_tip/2, d_tip/2, d_tip/2*1.3, -d_tip/2*1.3, -d_tip/2], y=[-t2, -t2, -t2-1.5, -t2-1.5, -t2], fill="toself", fillcolor='rgba(180,180,180,0.6)', name="Bottom Tip")
     ]
     
+    # CRITICAL UPDATE 3: Restructured animation framing lists so Plotly initializes data arrays perfectly on click
     frames = []
     for step in simulation_timeline:
         frame_data = list(base_traces)
@@ -166,24 +187,22 @@ else:
             h_penetration = (total_t * 0.75) / 2.0 * min(1.0, 0.4 + (step["cycle"] / active_time) * 0.6)
             n_color = 'rgba(255, 0, 0, 0.9)' if dia >= exp_limit else 'rgba(148, 0, 211, 0.85)'
             
-            frame_data.append(go.Scatter(x=r_nugget * 1.25 * np.cos(theta), y=mid_y + h_penetration * 1.15 * np.sin(theta), fill="toself", fillcolor='rgba(255,140,0,0.25)', name="HAZ Zone"))
-            frame_data.append(go.Scatter(x=r_nugget * np.cos(theta), y=mid_y + h_penetration * np.sin(theta), fill="toself", fillcolor=n_color, line=dict(color='yellow', width=1.5), name=f"Liquid Pool ({round(dia,2)}mm)"))
+            frame_data.append(go.Scatter(x=list(r_nugget * 1.25 * np.cos(theta)), y=list(mid_y + h_penetration * 1.15 * np.sin(theta)), fill="toself", fillcolor='rgba(255,140,0,0.25)', name="HAZ Zone"))
+            frame_data.append(go.Scatter(x=list(r_nugget * np.cos(theta)), y=list(mid_y + h_penetration * np.sin(theta)), fill="toself", fillcolor=n_color, line=dict(color='yellow', width=1.5), name="Weld Pool"))
         else:
-            frame_data.append(go.Scatter(x=[0], y=[0], mode='markers', opacity=0, name="HAZ Zone"))
-            frame_data.append(go.Scatter(x=[0], y=[0], mode='markers', opacity=0, name="Liquid Pool"))
+            frame_data.append(go.Scatter(x=[0.0], y=[0.0], mode='markers', opacity=0, name="HAZ Zone"))
+            frame_data.append(go.Scatter(x=[0.0], y=[0.0], mode='markers', opacity=0, name="Weld Pool"))
 
         frames.append(go.Frame(data=frame_data, name=f"cycle_{step['cycle']}"))
 
     for trace in base_traces:
         sorpas_fig.add_trace(trace)
     
-    final_step = simulation_timeline[-1]
-    r_n = final_step["diameter"] / 2.0
-    h_p = (total_t * 0.75) / 2.0
-    col_n = 'rgba(255, 0, 0, 0.9)' if final_step["diameter"] >= final_step["expulsion"] else 'rgba(148, 0, 211, 0.85)'
-    
-    sorpas_fig.add_trace(go.Scatter(x=r_n * 1.25 * np.cos(theta), y=mid_y + h_p * 1.15 * np.sin(theta), fill="toself", fillcolor='rgba(255,140,0,0.25)', name="HAZ Zone"))
-    sorpas_fig.add_trace(go.Scatter(x=r_n * np.cos(theta), y=mid_y + h_p * np.sin(theta), fill="toself", fillcolor=col_n, line=dict(color='yellow'), name="Liquid Pool"))
+    # Load default trace view handles
+    initial_step = simulation_timeline[0]
+    r_n_init = max(0.1, initial_step["diameter"]) / 2.0
+    sorpas_fig.add_trace(go.Scatter(x=list(r_n_init * 1.25 * np.cos(theta)), y=list(mid_y + 0.1 * np.sin(theta)), fill="toself", fillcolor='rgba(255,140,0,0.05)', name="HAZ Zone"))
+    sorpas_fig.add_trace(go.Scatter(x=list(r_n_init * np.cos(theta)), y=list(mid_y + 0.1 * np.sin(theta)), fill="toself", fillcolor='rgba(148, 0, 211, 0.05)', line=dict(color='yellow'), name="Weld Pool"))
 
     sorpas_fig.frames = frames
 
@@ -194,23 +213,21 @@ else:
         xaxis=dict(range=[-width_box, width_box]),
         updatemenus=[dict(
             type="buttons", showactive=False, direction="right",
-            x=0.1, y=-0.15, xanchor="left", yanchor="top",
+            x=0.0, y=-0.18, xanchor="left", yanchor="top",
             buttons=[
-                dict(label="▶ Play Growth", method="animate", args=[None, dict(frame=dict(duration=80, redraw=True), fromcurrent=True, transition=dict(duration=0))]),
-                dict(label="⏸ Pause", method="animate", args=[[None], dict(frame=dict(duration=0, redraw=False), mode="immediate", transition=dict(duration=0))])
+                dict(label="▶ Play Growth", method="animate", args=[None, dict(frame=dict(duration=150, redraw=True), fromcurrent=True, transition=dict(duration=0))]),
+                dict(label="⏸ Pause", method="animate", args=[[None], dict(frame=dict(duration=0, redraw=True), mode="immediate", transition=dict(duration=0))])
             ]
         )],
         sliders=[dict(
-            steps=[dict(method="animate", args=[[f"cycle_{s['cycle']}"], dict(mode="immediate", frame=dict(duration=0, redraw=True), transition=dict(duration=0))], label=f"Cy:{s['cycle']}") for s in simulation_timeline],
-            x=0.4, y=-0.12, currentvalue=dict(font=dict(size=12, color="cyan"), prefix="Time Progress: ", visible=True)
+            steps=[dict(method="animate", args=[[f"cycle_{s['cycle']}"], dict(mode="immediate", frame=dict(duration=0, redraw=True), transition=dict(duration=0))], label=f"{s['cycle']} cy") for s in simulation_timeline],
+            x=0.35, y=-0.12, currentvalue=dict(font=dict(size=12, color="cyan"), prefix="Time: ", visible=True)
         )]
     )
 
     col1, col2 = st.columns([1, 1])
-    with col1:
-        st.plotly_chart(fig, use_container_width=True)
-    with col2:
-        st.plotly_chart(sorpas_fig, use_container_width=True)
+    with col1: st.plotly_chart(fig, use_container_width=True)
+    with col2: st.plotly_chart(sorpas_fig, use_container_width=True)
         
     st.divider()
     last_res = simulation_timeline[-1]
