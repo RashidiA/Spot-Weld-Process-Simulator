@@ -78,7 +78,7 @@ if is_zinc:
 target_min = 4 * np.sqrt(t_min)
 
 # Generate 3D Space Matrices
-currents = np.linspace(5000, 13000, 50)  # High resolution for smooth contours
+currents = np.linspace(5000, 13000, 50)  
 times = np.linspace(3, 17, 40)
 forces = np.linspace(100, 450, 40)
 
@@ -106,7 +106,6 @@ else:
     tip_eff = (6.0 / d_tip)**2
     
     if "X-Y Plane" in slice_plane:
-        # Fixed Force (Z Axis), Vary Current (X) and Time (Y)
         I_2d, T_2d = np.meshgrid(currents, times)
         F_fixed = slice_force
         
@@ -115,7 +114,6 @@ else:
         
         fig = go.Figure()
         
-        # 1. Background Continuous Heatmap
         fig.add_trace(go.Contour(
             x=currents, y=times, z=nugget_growth_2d,
             colorscale='Plasma',
@@ -123,7 +121,6 @@ else:
             contours=dict(showlabels=True, labelfont=dict(size=12, color='white'))
         ))
         
-        # 2. Minimum Nugget Boundary Trace (Cyan Line)
         fig.add_trace(go.Contour(
             x=currents, y=times, z=nugget_growth_2d,
             showscale=False,
@@ -133,7 +130,6 @@ else:
             name=f'Min Nugget ({round(target_min,2)}mm)'
         ))
         
-        # 3. Expulsion Limit Trace (Dashed Red Line)
         fig.add_trace(go.Contour(
             x=currents, y=times, z=nugget_growth_2d,
             showscale=False,
@@ -149,21 +145,24 @@ else:
             yaxis_title="Welding Time (Cycles)",
             height=700,
             showlegend=True,
-            legend=dict(yanchor="top", y=0.99, xanchor="left", x=0.01, bgcolor="rgba(0,0,0,0.5)")
+            # FIXED: Added font color configuration to turn text white
+            legend=dict(
+                yanchor="top", y=0.99, 
+                xanchor="left", x=0.01, 
+                bgcolor="rgba(0,0,0,0.65)",
+                font=dict(color="white", size=12)
+            )
         )
         
     else:
-        # Fixed Time (Y Axis), Vary Current (X) and Force (Z)
         I_2d, F_2d = np.meshgrid(currents, forces)
         T_fixed = slice_time
         
-        # Calculate matrix variables across the X-Z projection space
         nugget_growth_2d = k_final * ((I_2d * tip_eff)/10000)**2 * (T_fixed/10) * (300/F_2d)**0.25 * 5.5
         exp_limit_2d = (5.5 * np.sqrt(t_min)) * (F_2d / 300)**0.1 * (d_tip / 6.0)**0.2 * (expulsion_sens / 1.4)
         
         fig = go.Figure()
         
-        # 1. Background Continuous Heatmap
         fig.add_trace(go.Contour(
             x=currents, y=forces, z=nugget_growth_2d,
             colorscale='Plasma',
@@ -171,7 +170,6 @@ else:
             contours=dict(showlabels=True, labelfont=dict(size=12, color='white'))
         ))
         
-        # 2. Minimum Nugget Boundary Trace (Cyan Line)
         fig.add_trace(go.Contour(
             x=currents, y=forces, z=nugget_growth_2d,
             showscale=False,
@@ -181,8 +179,6 @@ else:
             name=f'Min Nugget ({round(target_min,2)}mm)'
         ))
         
-        # 3. Dynamic Slope Expulsion Boundary Line
-        # We track the zero threshold of (Nugget Growth - Expulsion Limit) to parse the slope path accurately
         fig.add_trace(go.Contour(
             x=currents, y=forces, z=(nugget_growth_2d - exp_limit_2d),
             showscale=False,
@@ -198,7 +194,13 @@ else:
             yaxis_title="Welding Force (kg)",
             height=700,
             showlegend=True,
-            legend=dict(yanchor="top", y=0.99, xanchor="left", x=0.01, bgcolor="rgba(0,0,0,0.5)")
+            # FIXED: Added font color configuration to turn text white
+            legend=dict(
+                yanchor="top", y=0.99, 
+                xanchor="left", x=0.01, 
+                bgcolor="rgba(0,0,0,0.65)",
+                font=dict(color="white", size=12)
+            )
         )
 
 # --- DISPLAY & EXPORT ---
@@ -212,7 +214,6 @@ with col2:
     st.metric("Effective k-Factor", round(k_final, 3))
     st.metric("Min Nugget Target", f"{round(target_min, 2)} mm")
     
-    # Brittle Failure Risk Assessment
     risk_level = "Low"
     if max_ce > 0.3:
         risk_level = "High"
@@ -223,7 +224,6 @@ with col2:
     else:
         st.success(f"✅ {risk_level} RISK: Ductile weld.")
 
-    # --- CSV DOWNLOAD LOGIC ---
     report_data = {
         "Parameter": ["Ply 1 Material", "Ply 1 Thick", "Ply 2 Material", "Ply 2 Thick", 
                       "Ply 3 Material", "Ply 3 Thick", "Total Thickness", 
