@@ -78,11 +78,11 @@ if is_zinc:
 target_min = 4 * np.sqrt(t_min)
 
 # Generate 3D Space Matrices
-currents = np.linspace(5000, 13000, 50)  # Upped density for cleaner 2D slicing lines
+currents = np.linspace(5000, 13000, 50)  # High resolution for smooth contours
 times = np.linspace(3, 17, 40)
 forces = np.linspace(100, 450, 40)
 
-# --- GRAPH GENERATION BASE LAYER ---
+# --- GRAPH GENERATION LAYER ---
 if graph_mode == "Complete 3D Volumetric Lobe":
     I, T, F = np.meshgrid(currents, times, forces)
     tip_eff = (6.0 / d_tip)**2 
@@ -103,7 +103,6 @@ if graph_mode == "Complete 3D Volumetric Lobe":
     )
 
 else:
-    # --- 2D SECTIONING PROCESSING LAYER ---
     tip_eff = (6.0 / d_tip)**2
     
     if "X-Y Plane" in slice_plane:
@@ -116,7 +115,7 @@ else:
         
         fig = go.Figure()
         
-        # Heatmap Background Contours
+        # 1. Background Continuous Heatmap
         fig.add_trace(go.Contour(
             x=currents, y=times, z=nugget_growth_2d,
             colorscale='Plasma',
@@ -124,20 +123,22 @@ else:
             contours=dict(showlabels=True, labelfont=dict(size=12, color='white'))
         ))
         
-        # Minimum Nugget Boundary Line (4*sqrt(t))
+        # 2. Minimum Nugget Boundary Trace (Cyan Line)
         fig.add_trace(go.Contour(
             x=currents, y=times, z=nugget_growth_2d,
-            contours_type='constraint',
-            contours=dict(type='equal', value=target_min),
+            showscale=False,
+            contours_coloring='none',
+            contours=dict(start=target_min, end=target_min, coloring='none'),
             line=dict(color='cyan', width=4),
             name=f'Min Nugget ({round(target_min,2)}mm)'
         ))
         
-        # Expulsion Upper Boundary Limit Line
+        # 3. Expulsion Limit Trace (Dashed Red Line)
         fig.add_trace(go.Contour(
             x=currents, y=times, z=nugget_growth_2d,
-            contours_type='constraint',
-            contours=dict(type='equal', value=exp_limit_2d),
+            showscale=False,
+            contours_coloring='none',
+            contours=dict(start=exp_limit_2d, end=exp_limit_2d, coloring='none'),
             line=dict(color='red', width=4, dash='dash'),
             name=f'Expulsion Bound ({round(exp_limit_2d,2)}mm)'
         ))
@@ -156,12 +157,13 @@ else:
         I_2d, F_2d = np.meshgrid(currents, forces)
         T_fixed = slice_time
         
+        # Calculate matrix variables across the X-Z projection space
         nugget_growth_2d = k_final * ((I_2d * tip_eff)/10000)**2 * (T_fixed/10) * (300/F_2d)**0.25 * 5.5
         exp_limit_2d = (5.5 * np.sqrt(t_min)) * (F_2d / 300)**0.1 * (d_tip / 6.0)**0.2 * (expulsion_sens / 1.4)
         
         fig = go.Figure()
         
-        # Heatmap Background Contours
+        # 1. Background Continuous Heatmap
         fig.add_trace(go.Contour(
             x=currents, y=forces, z=nugget_growth_2d,
             colorscale='Plasma',
@@ -169,21 +171,23 @@ else:
             contours=dict(showlabels=True, labelfont=dict(size=12, color='white'))
         ))
         
-        # Minimum Nugget Boundary Line
+        # 2. Minimum Nugget Boundary Trace (Cyan Line)
         fig.add_trace(go.Contour(
             x=currents, y=forces, z=nugget_growth_2d,
-            contours_type='constraint',
-            contours=dict(type='equal', value=target_min),
+            showscale=False,
+            contours_coloring='none',
+            contours=dict(start=target_min, end=target_min, coloring='none'),
             line=dict(color='cyan', width=4),
             name=f'Min Nugget ({round(target_min,2)}mm)'
         ))
         
-        # Expulsion Boundary Line (Dynamic along the profile)
-        # For non-flat boundary limits, we match where nugget growth hits the limit values
+        # 3. Dynamic Slope Expulsion Boundary Line
+        # We track the zero threshold of (Nugget Growth - Expulsion Limit) to parse the slope path accurately
         fig.add_trace(go.Contour(
-            x=currents, y=forces, z=nugget_growth_2d - exp_limit_2d,
-            contours_type='constraint',
-            contours=dict(type='equal', value=0),
+            x=currents, y=forces, z=(nugget_growth_2d - exp_limit_2d),
+            showscale=False,
+            contours_coloring='none',
+            contours=dict(start=0, end=0, coloring='none'),
             line=dict(color='red', width=4, dash='dash'),
             name='Expulsion Bound Line'
         ))
