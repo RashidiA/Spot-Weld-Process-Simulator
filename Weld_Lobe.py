@@ -6,8 +6,8 @@ import streamlit.components.v1 as components
 import json
 
 # --- CONFIGURATION ---
-st.set_page_config(page_title="Asari-Rashidi SORPAS Time-Sim", layout="wide")
-st.title("🔬 Real-Time Transient Nugget Growth Simulator (SORPAS WebGL/Canvas Mode)")
+st.set_page_config(page_title="Spot Welding Process Simulator", layout="wide")
+st.title("🔬 Real-Time Transient Nugget Growth Simulator")
 
 # --- MATERIAL DATABASE ---
 materials_db = {
