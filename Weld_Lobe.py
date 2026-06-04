@@ -162,8 +162,9 @@ else:
         fig.add_trace(go.Scatter(x=[active_current], y=[active_force], mode='markers', marker=dict(color='white', size=12, symbol='cross'), name='Operating Point'))
         fig.update_layout(xaxis_title="Current (A)", yaxis_title="Force (kg)", template="plotly_dark", height=500, legend=dict(yanchor="top", y=0.99, xanchor="left", x=0.01))
 
-    # --- ADVANCED NATIVE HTML5 CANVAS EMBED (WITH FIXES) ---
-    canvas_html = f"""
+    # --- ADVANCED NATIVE HTML5 CANVAS EMBED (STABLE PARSING SETUP) ---
+    # Separated from f-strings entirely to ensure absolute JavaScript reliability inside Streamlit
+    canvas_html = """
     <div style="background-color: #111111; padding: 15px; border-radius: 8px; font-family: sans-serif; color: white; box-sizing: border-box; height: 490px;">
         <h4 style="margin-top: 0; margin-bottom: 12px; color: #E0E0E0; font-size: 15px;">Transient Nugget Thermal Development Map</h4>
         <canvas id="weldCanvas" width="540" height="360" style="background-color: #1e1e1e; border: 1px solid #333; display: block; margin: 0 auto; border-radius: 4px;"></canvas>
@@ -171,17 +172,16 @@ else:
         <div style="margin-top: 15px; display: flex; gap: 12px; align-items: center; justify-content: center; height: 45px;">
             <button onclick="startSimulationPlayback()" style="background-color: #007bff; color: white; border: none; padding: 10px 20px; border-radius: 4px; cursor: pointer; font-weight: bold; font-size: 13px;">▶ Play Growth</button>
             <button onclick="stopSimulationPlayback()" style="background-color: #6c757d; color: white; border: none; padding: 10px 20px; border-radius: 4px; cursor: pointer; font-weight: bold; font-size: 13px;">⏸ Pause</button>
-            <span id="cycleLabel" style="font-size: 14px; color: #00ffff; margin-left: 10px; font-family: monospace; font-weight: bold; min-width: 180px;">Cycle: 1 / {active_time} (0.00 mm)</span>
+            <span id="cycleLabel" style="font-size: 14px; color: #00ffff; margin-left: 10px; font-family: monospace; font-weight: bold; min-width: 180px;">Loading engine...</span>
         </div>
     </div>
 
     <script>
-        // Inject compiled dataset from python backend
-        const simData = {json.dumps(simulation_timeline)};
-        const t1 = {t1};
-        const t2 = {t2};
-        const dTip = {d_tip};
-        const maxTime = {active_time};
+        const simData = """ + json.dumps(simulation_timeline) + """;
+        const t1 = """ + str(t1) + """;
+        const t2 = """ + str(t2) + """;
+        const dTip = """ + str(d_tip) + """;
+        const maxTime = """ + str(active_time) + f""";
         
         const canvas = document.getElementById('weldCanvas');
         const ctx = canvas.getContext('2d');
@@ -195,7 +195,6 @@ else:
             if (index >= simData.length) index = simData.length - 1;
             const data = simData[index];
             
-            // Wipe working buffer context frame
             ctx.clearRect(0, 0, canvas.width, canvas.height);
             
             const centerX = canvas.width / 2;
@@ -207,20 +206,20 @@ else:
             const h2 = t2 * scale;
             const tipW = (dTip / 2) * scale;
 
-            // Sheet 1 (Top Layer Profile)
+            // Sheet 1 (Top Layer)
             ctx.fillStyle = 'rgba(100, 149, 237, 0.25)';
             ctx.strokeStyle = 'rgba(100, 149, 237, 0.7)';
             ctx.lineWidth = 1.5;
             ctx.fillRect(centerX - wBox/2, centerY - h1, wBox, h1);
             ctx.strokeRect(centerX - wBox/2, centerY - h1, wBox, h1);
 
-            // Sheet 2 (Bottom Layer Profile)
+            // Sheet 2 (Bottom Layer)
             ctx.fillStyle = 'rgba(144, 238, 144, 0.25)';
             ctx.strokeStyle = 'rgba(144, 238, 144, 0.7)';
             ctx.fillRect(centerX - wBox/2, centerY, wBox, h2);
             ctx.strokeRect(centerX - wBox/2, centerY, wBox, h2);
 
-            // Curved Electrode Profile - Matching genuine SORPAS geometry patterns
+            // Curved Electrode Profile - Genuine SORPAS Geometry Mapping
             ctx.fillStyle = 'rgba(180, 180, 180, 0.7)';
             
             // Top Electrode
@@ -247,8 +246,6 @@ else:
 
             if (dia > 0.05) {{
                 const rNugget = (dia / 2) * scale;
-                
-                // Penetration sizing index
                 const penetrationProgress = Math.min(1.0, 0.4 + (data.cycle / maxTime) * 0.6);
                 const hPenetration = (((t1 + t2) * 0.75) / 2) * scale * penetrationProgress;
 
@@ -268,8 +265,7 @@ else:
                 ctx.stroke();
             }}
 
-            // Corrected JS string parsing tokens (escaped with backslashes to block python parser substitution)
-            document.getElementById('cycleLabel').innerText = `Cycle: \${data.cycle} / \${maxTime} (\${dia.toFixed(2)} mm)`;
+            document.getElementById('cycleLabel').innerText = `Cycle: ${data.cycle} / ${maxTime} (${dia.toFixed(2)} mm)`;
         }}
 
         function playbackLoop() {{
@@ -294,7 +290,6 @@ else:
             if (animationTimer) clearTimeout(animationTimer);
         }}
 
-        // Draw initial static state
         drawFrame(0);
     </script>
     """
@@ -303,8 +298,8 @@ else:
     with col1: 
         st.plotly_chart(fig, use_container_width=True)
     with col2: 
-        # Expanded safe container bounding height to 550 to protect control elements
-        components.html(canvas_html, height=550)
+        # Stable window padding height allocation
+        components.html(canvas_html, height=560)
         
     st.divider()
     last_res = simulation_timeline[-1]
