@@ -113,7 +113,6 @@ if graph_mode == "Complete 3D Volumetric Lobe":
         isomin=target_min, isomax=target_min*2.5, surface_count=4, colorscale='Plasma', opacity=0.4,
         colorbar_title="Dia (mm)"
     ))
-    # CRITICAL UPDATE 1: Scaled layout workspace height property to 850 for a bigger graphic window view
     fig.update_layout(
         scene=dict(xaxis_title='Current (A)', yaxis_title='Time (Cycles)', zaxis_title='Force (kg)'),
         margin=dict(l=0, r=0, b=0, t=40), height=850, template="plotly_dark"
@@ -141,7 +140,6 @@ else:
 
         fig = go.Figure()
         fig.add_trace(go.Contour(x=currents, y=times, z=nugget_growth_2d, colorscale='Plasma', colorbar=dict(title="Dia (mm)")))
-        # CRITICAL UPDATE 2: Restored safety threshold contours lines explicitly back onto the 2D plane graph
         fig.add_trace(go.Contour(x=currents, y=times, z=nugget_growth_2d, showscale=False, contours_coloring='none',
                                  contours=dict(start=target_min, end=target_min), line=dict(color='cyan', width=4), name='Min Target'))
         fig.add_trace(go.Contour(x=currents, y=times, z=nugget_growth_2d, showscale=False, contours_coloring='none',
@@ -168,41 +166,50 @@ else:
     mid_y = (t1 - t2) / 2.0
     theta = np.linspace(0, 2*np.pi, 100)
 
-    base_traces = [
-        go.Scatter(x=[-width_box, width_box, width_box, -width_box, -width_box], y=[0.0, 0.0, t1, t1, 0.0], fill="toself", fillcolor='rgba(100, 149, 237, 0.25)', line=dict(color='royalblue'), name=mat1),
-        go.Scatter(x=[-width_box, width_box, width_box, -width_box, -width_box], y=[-t2, -t2, 0.0, 0.0, -t2], fill="toself", fillcolor='rgba(144, 238, 144, 0.25)', line=dict(color='forestgreen'), name=mat2),
-        go.Scatter(x=[-d_tip/2, d_tip/2, d_tip/2*1.3, -d_tip/2*1.3, -d_tip/2], y=[t1, t1, t1+1.5, t1+1.5, t1], fill="toself", fillcolor='rgba(180,180,180,0.6)', name="Top Tip"),
-        go.Scatter(x=[-d_tip/2, d_tip/2, d_tip/2*1.3, -d_tip/2*1.3, -d_tip/2], y=[-t2, -t2, -t2-1.5, -t2-1.5, -t2], fill="toself", fillcolor='rgba(180,180,180,0.6)', name="Bottom Tip")
-    ]
+    # Static Traces (Sheets & Tips)
+    sheet1 = go.Scatter(x=[-width_box, width_box, width_box, -width_box, -width_box], y=[0.0, 0.0, t1, t1, 0.0], fill="toself", fillcolor='rgba(100, 149, 237, 0.25)', line=dict(color='royalblue'), name=mat1)
+    sheet2 = go.Scatter(x=[-width_box, width_box, width_box, -width_box, -width_box], y=[-t2, -t2, 0.0, 0.0, -t2], fill="toself", fillcolor='rgba(144, 238, 144, 0.25)', line=dict(color='forestgreen'), name=mat2)
+    tip_top = go.Scatter(x=[-d_tip/2, d_tip/2, d_tip/2*1.3, -d_tip/2*1.3, -d_tip/2], y=[t1, t1, t1+1.5, t1+1.5, t1], fill="toself", fillcolor='rgba(180,180,180,0.6)', name="Top Tip")
+    tip_bottom = go.Scatter(x=[-d_tip/2, d_tip/2, d_tip/2*1.3, -d_tip/2*1.3, -d_tip/2], y=[-t2, -t2, -t2-1.5, -t2-1.5, -t2], fill="toself", fillcolor='rgba(180,180,180,0.6)', name="Bottom Tip")
     
-    # CRITICAL UPDATE 3: Restructured animation framing lists so Plotly initializes data arrays perfectly on click
+    # Placeholder Dynamic Traces (HAZ and Pool)
+    haz_trace = go.Scatter(x=[None], y=[None], fill="toself", fillcolor='rgba(255,140,0,0.25)', name="HAZ Zone", mode='lines')
+    pool_trace = go.Scatter(x=[None], y=[None], fill="toself", fillcolor='rgba(148, 0, 211, 0.85)', line=dict(color='yellow', width=1.5), name="Weld Pool", mode='lines')
+
+    # Add all initial traces
+    sorpas_fig.add_trace(sheet1)
+    sorpas_fig.add_trace(sheet2)
+    sorpas_fig.add_trace(tip_top)
+    sorpas_fig.add_trace(tip_bottom)
+    sorpas_fig.add_trace(haz_trace)
+    sorpas_fig.add_trace(pool_trace)
+
     frames = []
     for step in simulation_timeline:
-        frame_data = list(base_traces)
         dia = step["diameter"]
         exp_limit = step["expulsion"]
         
         if dia > 0.1:
             r_nugget = dia / 2.0
-            h_penetration = (total_t * 0.75) / 2.0 * min(1.0, 0.4 + (step["cycle"] / active_time) * 0.6)
+            h_p = (total_t * 0.75) / 2.0 * min(1.0, 0.4 + (step["cycle"] / active_time) * 0.6)
             n_color = 'rgba(255, 0, 0, 0.9)' if dia >= exp_limit else 'rgba(148, 0, 211, 0.85)'
             
-            frame_data.append(go.Scatter(x=list(r_nugget * 1.25 * np.cos(theta)), y=list(mid_y + h_penetration * 1.15 * np.sin(theta)), fill="toself", fillcolor='rgba(255,140,0,0.25)', name="HAZ Zone"))
-            frame_data.append(go.Scatter(x=list(r_nugget * np.cos(theta)), y=list(mid_y + h_penetration * np.sin(theta)), fill="toself", fillcolor=n_color, line=dict(color='yellow', width=1.5), name="Weld Pool"))
+            x_haz = list(r_nugget * 1.25 * np.cos(theta))
+            y_haz = list(mid_y + h_p * 1.15 * np.sin(theta))
+            x_pool = list(r_nugget * np.cos(theta))
+            y_pool = list(mid_y + h_p * np.sin(theta))
         else:
-            frame_data.append(go.Scatter(x=[0.0], y=[0.0], mode='markers', opacity=0, name="HAZ Zone"))
-            frame_data.append(go.Scatter(x=[0.0], y=[0.0], mode='markers', opacity=0, name="Weld Pool"))
+            x_haz, y_haz, x_pool, y_pool = [None], [None], [None], [None]
+            n_color = 'rgba(148, 0, 211, 0.85)'
 
-        frames.append(go.Frame(data=frame_data, name=f"cycle_{step['cycle']}"))
-
-    for trace in base_traces:
-        sorpas_fig.add_trace(trace)
-    
-    # Load default trace view handles
-    initial_step = simulation_timeline[0]
-    r_n_init = max(0.1, initial_step["diameter"]) / 2.0
-    sorpas_fig.add_trace(go.Scatter(x=list(r_n_init * 1.25 * np.cos(theta)), y=list(mid_y + 0.1 * np.sin(theta)), fill="toself", fillcolor='rgba(255,140,0,0.05)', name="HAZ Zone"))
-    sorpas_fig.add_trace(go.Scatter(x=list(r_n_init * np.cos(theta)), y=list(mid_y + 0.1 * np.sin(theta)), fill="toself", fillcolor='rgba(148, 0, 211, 0.05)', line=dict(color='yellow'), name="Weld Pool"))
+        frames.append(go.Frame(
+            data=[
+                sheet1, sheet2, tip_top, tip_bottom,
+                go.Scatter(x=x_haz, y=y_haz),
+                go.Scatter(x=x_pool, y=y_pool, fillcolor=n_color)
+            ],
+            name=f"cycle_{step['cycle']}"
+        ))
 
     sorpas_fig.frames = frames
 
@@ -212,16 +219,16 @@ else:
         yaxis=dict(scaleanchor="x", scaleratio=1, range=[-t2 - 2, t1 + 2]),
         xaxis=dict(range=[-width_box, width_box]),
         updatemenus=[dict(
-            type="buttons", showactive=False, direction="right",
-            x=0.0, y=-0.18, xanchor="left", yanchor="top",
+            type="buttons", showactive=False,
+            x=0.05, y=-0.2,
             buttons=[
-                dict(label="▶ Play Growth", method="animate", args=[None, dict(frame=dict(duration=150, redraw=True), fromcurrent=True, transition=dict(duration=0))]),
-                dict(label="⏸ Pause", method="animate", args=[[None], dict(frame=dict(duration=0, redraw=True), mode="immediate", transition=dict(duration=0))])
+                dict(label="▶ Play", method="animate", args=[None, dict(frame=dict(duration=100, redraw=True), fromcurrent=True)]),
+                dict(label="⏸ Pause", method="animate", args=[[None], dict(frame=dict(duration=0, redraw=True), mode="immediate")])
             ]
         )],
         sliders=[dict(
-            steps=[dict(method="animate", args=[[f"cycle_{s['cycle']}"], dict(mode="immediate", frame=dict(duration=0, redraw=True), transition=dict(duration=0))], label=f"{s['cycle']} cy") for s in simulation_timeline],
-            x=0.35, y=-0.12, currentvalue=dict(font=dict(size=12, color="cyan"), prefix="Time: ", visible=True)
+            steps=[dict(method="animate", args=[[f"cycle_{s['cycle']}"], dict(mode="immediate", frame=dict(duration=0, redraw=True))], label=f"{s['cycle']}") for s in simulation_timeline],
+            x=0.3, y=-0.1, len=0.7
         )]
     )
 
