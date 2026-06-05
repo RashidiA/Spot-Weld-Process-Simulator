@@ -1,12 +1,12 @@
-# Asari-Rashidi 3-Ply Model (Symmetric Visual Layout Edition)
+# Asari-Rashidi Spot Welding Model (Special Edition)
 import streamlit as st
 import numpy as np
 import plotly.graph_objects as go
 import streamlit.components.v1 as components
 
 # --- CONFIGURATION ---
-st.set_page_config(page_title="Asari-Rashidi SORPAS Time-Sim", layout="wide")
-st.title("🔬 Real-Time Transient Nugget Growth Simulator (SORPAS WebGL/Canvas Mode)")
+st.set_page_config(page_title="Spot Welding Lobe Simulator", layout="wide")
+st.title("🔬 Real-Time Transient Nugget Growth Simulator (WebGL/Canvas Mode)")
 
 # --- MATERIAL DATABASE ---
 materials_db = {
