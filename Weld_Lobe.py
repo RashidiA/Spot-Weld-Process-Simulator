@@ -105,24 +105,20 @@ else:
     else:
         I_2d, F_2d = np.meshgrid(currents, forces)
         nugget_growth_2d = k_approx * ((I_2d * tip_eff)/10000)**2 * (slice_time/10) * (300/F_2d)**0.25 * 5.5
-        exp_limit_2d = (5.5 * np.sqrt(t_min)) * (F_2d / 300)**0.1 * (d_tip / 6.0)**0.2
-
         fig = go.Figure()
         fig.add_trace(go.Contour(x=currents, y=forces, z=nugget_growth_2d, colorscale='Plasma', colorbar=dict(title="Dia (mm)")))
         fig.add_trace(go.Contour(x=currents, y=forces, z=nugget_growth_2d, showscale=False, contours_coloring='none',
                                  contours=dict(start=target_min, end=target_min), line=dict(color='cyan', width=4), name='Min Target'))
-        fig.add_trace(go.Contour(x=currents, y=forces, z=(nugget_growth_2d - exp_limit_2d), showscale=False, contours_coloring='none',
-                                 contours=dict(start=0, end=0), line=dict(color='red', width=4, dash='dash'), name='Expulsion Limit'))
         fig.add_trace(go.Scatter(x=[active_current], y=[active_force], mode='markers', marker=dict(color='white', size=12, symbol='cross'), name='Operating Point'))
         fig.update_layout(xaxis_title="Current (A)", yaxis_title="Force (kg)", template="plotly_dark", height=460, margin=dict(l=40, r=40, b=40, t=40), legend=dict(yanchor="top", y=0.99, xanchor="left", x=0.01))
 
-    # --- MATCHED EMBEDDED TRANSIENT SIMULATOR (460px Height Target) ---
+    # --- BALANCED EMBEDDED TRANSIENT SIMULATOR ---
     canvas_html = """
     <div style="background-color: #111111; padding: 12px 15px; border-radius: 8px; font-family: sans-serif; color: white; display: flex; flex-direction: column; height: 460px; box-sizing: border-box; justify-content: space-between;">
         <h4 style="margin: 0; color: #E0E0E0; font-size: 14px; font-weight: 600;">Transient Nugget Thermal Development Map</h4>
         
         <div style="display: flex; gap: 15px; align-items: center; justify-content: center; flex-grow: 1; margin: 5px 0;">
-            <canvas id="weldCanvas" width="450" height="270" style="background-color: #1e1e1e; border: 1px solid #333; border-radius: 4px;"></canvas>
+            <canvas id="weldCanvas" width="440" height="270" style="background-color: #1e1e1e; border: 1px solid #333; border-radius: 4px;"></canvas>
             
             <div style="display: flex; flex-direction: column; align-items: center; justify-content: center; width: 40px;">
                 <span style="font-size: 10px; font-weight: bold; color: #ffffff; margin-bottom: 3px;">1530°C</span>
@@ -192,7 +188,7 @@ else:
             
             const centerX = canvas.width / 2;
             const centerY = canvas.height / 2;
-            const scale = 32; // Scaling adjusted down to fit perfectly inside the new 270px canvas height
+            const scale = 32; 
             const wBox = dTip * 2.8 * scale;
             const h1 = t1 * scale;
             const h2 = t2 * scale;
@@ -213,7 +209,7 @@ else:
             ctx.fillRect(centerX - wBox/2, centerY, wBox, h2);
             ctx.strokeRect(centerX - wBox/2, centerY, wBox, h2);
 
-            # --- 2. ELECTRODES TRANSIENT THERMAL FOOTPRINTS ---
+            // --- 2. ELECTRODES TRANSIENT THERMAL FOOTPRINTS ---
             let topGrad = ctx.createLinearGradient(centerX, centerY - h1, centerX, centerY - h1 - 30);
             if (dia > 0) {
                 let tipHeatColor = "rgba(" + Math.floor(200 + 55 * thermalProgress) + ", " + Math.floor(69 + 40 * thermalProgress) + ", 0, 0.85)";
