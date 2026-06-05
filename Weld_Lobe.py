@@ -1,12 +1,12 @@
-# Asari-Rashidi 3-Ply Model (Spot Welding)
+# Asari-Rashidi 3-Ply Model (Symmetric Visual Layout Edition)
 import streamlit as st
 import numpy as np
 import plotly.graph_objects as go
 import streamlit.components.v1 as components
 
 # --- CONFIGURATION ---
-st.set_page_config(page_title="Spot Welding Lobe Simulation", layout="wide")
-st.title("🔬 Real-Time Transient Nugget Growth Simulator (WebGL/Canvas Mode)")
+st.set_page_config(page_title="Asari-Rashidi SORPAS Time-Sim", layout="wide")
+st.title("🔬 Real-Time Transient Nugget Growth Simulator (SORPAS WebGL/Canvas Mode)")
 
 # --- MATERIAL DATABASE ---
 materials_db = {
@@ -102,13 +102,24 @@ else:
                                  contours=dict(start=exp_limit_2d, end=exp_limit_2d), line=dict(color='red', width=4, dash='dash'), name='Expulsion Limit'))
         fig.add_trace(go.Scatter(x=[active_current], y=[active_time], mode='markers', marker=dict(color='white', size=12, symbol='cross'), name='Operating Point'))
         fig.update_layout(xaxis_title="Current (A)", yaxis_title="Weld Time (Cycles)", template="plotly_dark", height=460, margin=dict(l=40, r=40, b=40, t=40), legend=dict(yanchor="top", y=0.99, xanchor="left", x=0.01))
+    
     else:
+        # --- CURRENT VS FORCE PLANE WITH TRANSIENT EXPULSION BOUNDARY ---
         I_2d, F_2d = np.meshgrid(currents, forces)
         nugget_growth_2d = k_approx * ((I_2d * tip_eff)/10000)**2 * (slice_time/10) * (300/F_2d)**0.25 * 5.5
+        
+        # Calculate dynamic limit mapping corresponding to pressure/force grid array variations
+        exp_limit_2d = (5.5 * np.sqrt(t_min)) * (F_2d / 300)**0.1 * (d_tip / 6.0)**0.2
+
         fig = go.Figure()
         fig.add_trace(go.Contour(x=currents, y=forces, z=nugget_growth_2d, colorscale='Plasma', colorbar=dict(title="Dia (mm)")))
         fig.add_trace(go.Contour(x=currents, y=forces, z=nugget_growth_2d, showscale=False, contours_coloring='none',
                                  contours=dict(start=target_min, end=target_min), line=dict(color='cyan', width=4), name='Min Target'))
+        
+        # Differential zero-crossing tracking path for changing force parameters
+        fig.add_trace(go.Contour(x=currents, y=forces, z=(nugget_growth_2d - exp_limit_2d), showscale=False, contours_coloring='none',
+                                 contours=dict(start=0, end=0), line=dict(color='red', width=4, dash='dash'), name='Expulsion Limit'))
+        
         fig.add_trace(go.Scatter(x=[active_current], y=[active_force], mode='markers', marker=dict(color='white', size=12, symbol='cross'), name='Operating Point'))
         fig.update_layout(xaxis_title="Current (A)", yaxis_title="Force (kg)", template="plotly_dark", height=460, margin=dict(l=40, r=40, b=40, t=40), legend=dict(yanchor="top", y=0.99, xanchor="left", x=0.01))
 
