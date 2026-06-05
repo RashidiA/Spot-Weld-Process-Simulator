@@ -1,4 +1,4 @@
-# Asari-Rashidi 3-Ply Model (Thermal Analytics Edition)
+# Asari-Rashidi 3-Ply Model (Symmetric Visual Layout Edition)
 import streamlit as st
 import numpy as np
 import plotly.graph_objects as go
@@ -71,7 +71,7 @@ if is_zinc: k_approx *= 0.82
 tip_eff = (6.0 / d_tip)**2
 target_min = 4 * np.sqrt(t_min)
 
-# --- STATIC LOBE GENERATION ---
+# --- INTERACTIVE VIEW GENERATION ---
 if graph_mode == "Complete 3D Volumetric Lobe":
     I, T, F = np.meshgrid(currents, times, forces)
     nugget_growth = k_approx * ((I * tip_eff)/10000)**2 * (T/10) * (300/F)**0.25 * 5.5
@@ -83,11 +83,12 @@ if graph_mode == "Complete 3D Volumetric Lobe":
     ))
     fig.update_layout(
         scene=dict(xaxis_title='Current (A)', yaxis_title='Time (Cycles)', zaxis_title='Force (kg)'),
-        margin=dict(l=0, r=0, b=0, t=40), height=850, template="plotly_dark"
+        margin=dict(l=0, r=0, b=0, t=40), height=700, template="plotly_dark"
     )
     st.plotly_chart(fig, use_container_width=True)
 
 else:
+    # --- FIXED-HEIGHT PLOTLY CONTOUR SETUP (460px) ---
     if "X-Y Plane" in slice_plane:
         I_2d, T_2d = np.meshgrid(currents, times)
         nugget_growth_2d = k_approx * ((I_2d * tip_eff)/10000)**2 * (T_2d/10) * (300/slice_force)**0.25 * 5.5
@@ -100,7 +101,7 @@ else:
         fig.add_trace(go.Contour(x=currents, y=times, z=nugget_growth_2d, showscale=False, contours_coloring='none',
                                  contours=dict(start=exp_limit_2d, end=exp_limit_2d), line=dict(color='red', width=4, dash='dash'), name='Expulsion Limit'))
         fig.add_trace(go.Scatter(x=[active_current], y=[active_time], mode='markers', marker=dict(color='white', size=12, symbol='cross'), name='Operating Point'))
-        fig.update_layout(xaxis_title="Current (A)", yaxis_title="Weld Time (Cycles)", template="plotly_dark", height=500, legend=dict(yanchor="top", y=0.99, xanchor="left", x=0.01))
+        fig.update_layout(xaxis_title="Current (A)", yaxis_title="Weld Time (Cycles)", template="plotly_dark", height=460, margin=dict(l=40, r=40, b=40, t=40), legend=dict(yanchor="top", y=0.99, xanchor="left", x=0.01))
     else:
         I_2d, F_2d = np.meshgrid(currents, forces)
         nugget_growth_2d = k_approx * ((I_2d * tip_eff)/10000)**2 * (slice_time/10) * (300/F_2d)**0.25 * 5.5
@@ -113,36 +114,38 @@ else:
         fig.add_trace(go.Contour(x=currents, y=forces, z=(nugget_growth_2d - exp_limit_2d), showscale=False, contours_coloring='none',
                                  contours=dict(start=0, end=0), line=dict(color='red', width=4, dash='dash'), name='Expulsion Limit'))
         fig.add_trace(go.Scatter(x=[active_current], y=[active_force], mode='markers', marker=dict(color='white', size=12, symbol='cross'), name='Operating Point'))
-        fig.update_layout(xaxis_title="Current (A)", yaxis_title="Force (kg)", template="plotly_dark", height=500, legend=dict(yanchor="top", y=0.99, xanchor="left", x=0.01))
+        fig.update_layout(xaxis_title="Current (A)", yaxis_title="Force (kg)", template="plotly_dark", height=460, margin=dict(l=40, r=40, b=40, t=40), legend=dict(yanchor="top", y=0.99, xanchor="left", x=0.01))
 
-    # --- IN-BROWSER TRANSIENT ENGINE EMBED ---
+    # --- MATCHED EMBEDDED TRANSIENT SIMULATOR (460px Height Target) ---
     canvas_html = """
-    <div style="background-color: #111111; padding: 15px; border-radius: 8px; font-family: sans-serif; color: white; display: flex; flex-direction: column; height: 530px; box-sizing: border-box;">
-        <h4 style="margin: 0 0 12px 0; color: #E0E0E0; font-size: 15px;">Transient Nugget Thermal Development Map</h4>
+    <div style="background-color: #111111; padding: 12px 15px; border-radius: 8px; font-family: sans-serif; color: white; display: flex; flex-direction: column; height: 460px; box-sizing: border-box; justify-content: space-between;">
+        <h4 style="margin: 0; color: #E0E0E0; font-size: 14px; font-weight: 600;">Transient Nugget Thermal Development Map</h4>
         
-        <div style="display: flex; gap: 20px; align-items: flex-start; justify-content: center;">
-            <canvas id="weldCanvas" width="460" height="340" style="background-color: #1e1e1e; border: 1px solid #333; border-radius: 4px;"></canvas>
+        <div style="display: flex; gap: 15px; align-items: center; justify-content: center; flex-grow: 1; margin: 5px 0;">
+            <canvas id="weldCanvas" width="450" height="270" style="background-color: #1e1e1e; border: 1px solid #333; border-radius: 4px;"></canvas>
             
-            <div style="display: flex; flex-direction: column; align-items: center; justify-content: center; width: 45px; padding-top: 10px;">
-                <span style="font-size: 10px; font-weight: bold; color: #ffffff; margin-bottom: 4px;">1530°C</span>
-                <div style="width: 16px; height: 280px; background: linear-gradient(to top, #4b0082, #9400d3, #ffcc00, #ff4500, #ffffff); border: 1px solid #555; border-radius: 2px;"></div>
-                <span style="font-size: 10px; font-weight: bold; color: #888888; margin-top: 4px;">25°C</span>
-                <div style="font-size: 9px; color: #aaaaaa; letter-spacing: 1px; writing-mode: vertical-rl; text-orientation: mixed; margin-top: 8px; text-transform: uppercase;">Temperature</div>
+            <div style="display: flex; flex-direction: column; align-items: center; justify-content: center; width: 40px;">
+                <span style="font-size: 10px; font-weight: bold; color: #ffffff; margin-bottom: 3px;">1530°C</span>
+                <div style="width: 14px; height: 210px; background: linear-gradient(to top, #4b0082, #9400d3, #ffcc00, #ff4500, #ffffff); border: 1px solid #555; border-radius: 2px;"></div>
+                <span style="font-size: 10px; font-weight: bold; color: #888888; margin-top: 3px;">25°C</span>
+                <div style="font-size: 8px; color: #aaaaaa; letter-spacing: 0.5px; writing-mode: vertical-rl; text-orientation: mixed; margin-top: 6px; text-transform: uppercase;">Temperature</div>
             </div>
         </div>
         
-        <div style="margin-top: 12px; display: flex; flex-wrap: wrap; gap: 12px; justify-content: center; font-size: 11px; color: #BBBBBB;">
-            <div style="display: flex; align-items: center; gap: 4px;"><span style="width: 12px; height: 8px; background-color: rgba(100,149,237,0.25); border:1px solid rgba(100,149,237,0.7);"></span> Ply 1</div>
-            <div style="display: flex; align-items: center; gap: 4px;"><span style="width: 12px; height: 8px; background-color: rgba(144,238,144,0.25); border:1px solid rgba(144,238,144,0.7);"></span> Ply 2</div>
-            <div style="display: flex; align-items: center; gap: 4px;"><span style="width: 12px; height: 8px; background: linear-gradient(to right, #ff4500, #b4b4b4);"></span> Tip Thermal</div>
-            <div style="display: flex; align-items: center; gap: 4px;"><span style="width: 12px; height: 8px; background-color: rgba(255,140,0,0.22);"></span> HAZ Boundary</div>
-            <div style="display: flex; align-items: center; gap: 4px;"><span style="width: 12px; height: 8px; background: radial-gradient(#fff, #9400d3); border:1px solid #ffff00;"></span> Melt Pool</div>
-        </div>
+        <div>
+            <div style="display: flex; flex-wrap: wrap; gap: 10px; justify-content: center; font-size: 10px; color: #BBBBBB; margin-bottom: 8px;">
+                <div style="display: flex; align-items: center; gap: 4px;"><span style="width: 10px; height: 7px; background-color: rgba(100,149,237,0.25); border:1px solid rgba(100,149,237,0.7);"></span> Ply 1</div>
+                <div style="display: flex; align-items: center; gap: 4px;"><span style="width: 10px; height: 7px; background-color: rgba(144,238,144,0.25); border:1px solid rgba(144,238,144,0.7);"></span> Ply 2</div>
+                <div style="display: flex; align-items: center; gap: 4px;"><span style="width: 10px; height: 7px; background: linear-gradient(to right, #ff4500, #b4b4b4);"></span> Tip Thermal</div>
+                <div style="display: flex; align-items: center; gap: 4px;"><span style="width: 10px; height: 7px; background-color: rgba(255,140,0,0.22);"></span> HAZ</div>
+                <div style="display: flex; align-items: center; gap: 4px;"><span style="width: 10px; height: 7px; background: radial-gradient(#fff, #9400d3); border:1px solid #ffff00;"></span> Melt Pool</div>
+            </div>
 
-        <div style="margin-top: 15px; display: flex; gap: 12px; align-items: center; justify-content: center;">
-            <button onclick="startSimulationPlayback()" style="background-color: #007bff; color: white; border: none; padding: 8px 16px; border-radius: 4px; cursor: pointer; font-weight: bold; font-size: 13px;">▶ Play Growth</button>
-            <button onclick="stopSimulationPlayback()" style="background-color: #6c757d; color: white; border: none; padding: 8px 16px; border-radius: 4px; cursor: pointer; font-weight: bold; font-size: 13px;">⏸ Pause</button>
-            <span id="cycleLabel" style="font-size: 14px; color: #00ffff; font-family: monospace; font-weight: bold; min-width: 160px;">Ready</span>
+            <div style="display: flex; gap: 12px; align-items: center; justify-content: center; height: 32px;">
+                <button onclick="startSimulationPlayback()" style="background-color: #007bff; color: white; border: none; padding: 6px 14px; border-radius: 4px; cursor: pointer; font-weight: bold; font-size: 12px;">▶ Play Growth</button>
+                <button onclick="stopSimulationPlayback()" style="background-color: #6c757d; color: white; border: none; padding: 6px 14px; border-radius: 4px; cursor: pointer; font-weight: bold; font-size: 12px;">⏸ Pause</button>
+                <span id="cycleLabel" style="font-size: 13px; color: #00ffff; font-family: monospace; font-weight: bold; min-width: 150px;">Ready</span>
+            </div>
         </div>
     </div>
 
@@ -189,7 +192,7 @@ else:
             
             const centerX = canvas.width / 2;
             const centerY = canvas.height / 2;
-            const scale = 38;
+            const scale = 32; // Scaling adjusted down to fit perfectly inside the new 270px canvas height
             const wBox = dTip * 2.8 * scale;
             const h1 = t1 * scale;
             const h2 = t2 * scale;
@@ -198,7 +201,7 @@ else:
             const expulsion = data.expulsion;
             const thermalProgress = data.cycle / maxTime;
 
-            // --- 1. PLY LAYERS ---
+            // --- 1. MATERIAL PLY STRUCTURES ---
             ctx.fillStyle = 'rgba(100, 149, 237, 0.25)';
             ctx.strokeStyle = 'rgba(100, 149, 237, 0.7)';
             ctx.lineWidth = 1.5;
@@ -210,8 +213,8 @@ else:
             ctx.fillRect(centerX - wBox/2, centerY, wBox, h2);
             ctx.strokeRect(centerX - wBox/2, centerY, wBox, h2);
 
-            // --- 2. ELECTRODES HEAT FLUX GRADIENTS ---
-            let topGrad = ctx.createLinearGradient(centerX, centerY - h1, centerX, centerY - h1 - 40);
+            # --- 2. ELECTRODES TRANSIENT THERMAL FOOTPRINTS ---
+            let topGrad = ctx.createLinearGradient(centerX, centerY - h1, centerX, centerY - h1 - 30);
             if (dia > 0) {
                 let tipHeatColor = "rgba(" + Math.floor(200 + 55 * thermalProgress) + ", " + Math.floor(69 + 40 * thermalProgress) + ", 0, 0.85)";
                 topGrad.addColorStop(0, tipHeatColor);
@@ -224,13 +227,12 @@ else:
             ctx.beginPath();
             ctx.moveTo(centerX - tipRadiusX, centerY - h1);
             ctx.lineTo(centerX + tipRadiusX, centerY - h1);
-            ctx.bezierCurveTo(centerX + tipRadiusX * 1.4, centerY - h1 - 5, centerX + tipRadiusX * 1.6, centerY - h1 - 25, centerX + tipRadiusX * 1.8, centerY - h1 - 40);
-            ctx.lineTo(centerX - tipRadiusX * 1.8, centerY - h1 - 40);
-            ctx.bezierCurveTo(centerX - tipRadiusX * 1.6, centerY - h1 - 25, centerX - tipRadiusX * 1.4, centerY - h1 - 5, centerX - tipRadiusX, centerY - h1);
+            ctx.lineTo(centerX + tipRadiusX * 1.4, centerY - h1 - 30);
+            ctx.lineTo(centerX - tipRadiusX * 1.4, centerY - h1 - 30);
             ctx.closePath();
             ctx.fill();
 
-            let botGrad = ctx.createLinearGradient(centerX, centerY + h2, centerX, centerY + h2 + 40);
+            let botGrad = ctx.createLinearGradient(centerX, centerY + h2, centerX, centerY + h2 + 30);
             if (dia > 0) {
                 let tipHeatColor = "rgba(" + Math.floor(200 + 55 * thermalProgress) + ", " + Math.floor(69 + 40 * thermalProgress) + ", 0, 0.85)";
                 botGrad.addColorStop(0, tipHeatColor);
@@ -243,25 +245,24 @@ else:
             ctx.beginPath();
             ctx.moveTo(centerX - tipRadiusX, centerY + h2);
             ctx.lineTo(centerX + tipRadiusX, centerY + h2);
-            ctx.bezierCurveTo(centerX + tipRadiusX * 1.4, centerY + h2 + 5, centerX + tipRadiusX * 1.6, centerY + h2 + 25, centerX + tipRadiusX * 1.8, centerY + h2 + 40);
-            ctx.lineTo(centerX - tipRadiusX * 1.8, centerY + h2 + 40);
-            ctx.bezierCurveTo(centerX - tipRadiusX * 1.6, centerY + h2 + 25, centerX - tipRadiusX * 1.4, centerY + h2 + 5, centerX - tipRadiusX, centerY + h2);
+            ctx.lineTo(centerX + tipRadiusX * 1.4, centerY + h2 + 30);
+            ctx.lineTo(centerX - tipRadiusX * 1.4, centerY + h2 + 30);
             ctx.closePath();
             ctx.fill();
 
-            // --- 3. DYNAMIC TRANSIENT THERMAL MOLTEN POOL ---
+            // --- 3. DYNAMIC METRIC NUGGET & HAZ SHIFT ---
             if (dia > 0.05) {
                 const rNugget = (dia / 2) * scale;
                 const penetrationProgress = Math.min(1.0, 0.4 + (data.cycle / maxTime) * 0.6);
-                const hPenetration = (((t1 + t2) * 0.78) / 2) * scale * penetrationProgress;
+                const hPenetration = (((t1 + t2) * 0.76) / 2) * scale * penetrationProgress;
 
-                // HAZ Boundary
+                // HAZ Boundary Simulation Ring
                 ctx.fillStyle = 'rgba(255, 140, 0, 0.22)';
                 ctx.beginPath();
                 ctx.ellipse(centerX, centerY, rNugget * 1.28, hPenetration * 1.15, 0, 0, 2 * Math.PI);
                 ctx.fill();
 
-                // Core Pool Map
+                // Core Molten Thermal Gradient
                 let poolGrad = ctx.createRadialGradient(centerX, centerY, rNugget * 0.1, centerX, centerY, rNugget);
                 if (dia >= expulsion) {
                     poolGrad.addColorStop(0, '#ffffff');
@@ -322,15 +323,16 @@ else:
     </script>
     """
 
+    # --- PERFECT ALIGNED LAYOUT COLUMNS ---
     col1, col2 = st.columns([1, 1])
     with col1: 
         st.plotly_chart(fig, use_container_width=True)
     with col2: 
-        components.html(canvas_html, height=590)
+        components.html(canvas_html, height=460)
         
     st.divider()
     
-    # Dashboard Analytics Track
+    # Bottom Analytic Metrics Cards
     tip_eff_calc = (6.0 / d_tip)**2
     final_dia_calc = k_approx * ((active_current * tip_eff_calc)/10000)**2 * (active_time/10) * (300/active_force)**0.25 * 5.5
     expulsion_threshold_calc = (5.5 * np.sqrt(t_min)) * (active_force / 300)**0.1 * (d_tip / 6.0)**0.2
