@@ -58,7 +58,7 @@ Includes advanced high-strength steel (AHSS) and ultra-high-strength steel (UHSS
 * **Boron Steel (Usibor 1500)**
 * **Trip Steel (TRIP780)**
 
-*Includes a toggle for surface coatings (Zinc Coated GA/GI) that automatically adjusts initial interfacial contact resistances by applying a $0.82\times$ scale adjustment.*
+*Includes a toggle for surface coatings (Zinc Coated GA/GI) that automatically adjusts initial interfacial contact resistances by applying a 0.82\times scale adjustment.*
 
 ---
 
