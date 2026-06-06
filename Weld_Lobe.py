@@ -1,4 +1,4 @@
-# Asari-Rashidi Spot Welding Model (Special Edition - 3-Ply Asymmetric Growth & Strength Mode)
+# Asari-Rashidi Spot Welding Model (Advanced Metallurgical & Mechanical Suite)
 import streamlit as st
 import numpy as np
 import plotly.graph_objects as go
@@ -6,9 +6,9 @@ import streamlit.components.v1 as components
 
 # --- CONFIGURATION ---
 st.set_page_config(page_title="Spot Welding Lobe Simulator", layout="wide")
-st.title("🔬 Real-Time Transient Nugget Growth & Asymmetric Simulator (3-Ply Edition)")
+st.title("🔬 Real-Time Transient Nugget Growth & Metallurgical Simulator")
 
-# --- MATERIAL DATABASE WITH MECHANICAL PROPERTIES ---
+# --- MATERIAL DATABASE WITH MECHANICAL & CHEMICAL PROPERTIES ---
 materials_db = {
     "Mild Steel (JSC270)": {"res_factor": 1.0, "k_mod": 1.0, "ce": 0.08, "uts": 270},
     "High Strength (JSC440)": {"res_factor": 1.15, "k_mod": 1.05, "ce": 0.14, "uts": 440},
@@ -83,12 +83,14 @@ if use_ply3:
     k_mod_weighted = (t1 * m1_p["k_mod"] + t2 * m2_p["k_mod"] + t3 * m3_p["k_mod"]) / total_t
     res_weighted = (t1 * m1_p["res_factor"] + t2 * m2_p["res_factor"] + t3 * m3_p["res_factor"]) / total_t
     uts_weighted = (t1 * m1_p["uts"] + t2 * m2_p["uts"] + t3 * m3_p["uts"]) / total_t
+    ce_weighted = (t1 * m1_p["ce"] + t2 * m2_p["ce"] + t3 * m3_p["ce"]) / total_t
 else:
     total_t = t1 + t2
     t_min = min(t1, t2)
     k_mod_weighted = (t1 * m1_p["k_mod"] + t2 * m2_p["k_mod"]) / total_t
     res_weighted = (t1 * m1_p["res_factor"] + t2 * m2_p["res_factor"]) / total_t
     uts_weighted = (t1 * m1_p["uts"] + t2 * m2_p["uts"]) / total_t
+    ce_weighted = (t1 * m1_p["ce"] + t2 * m2_p["ce"]) / total_t
 
 k_approx = k_base * k_mod_weighted * res_weighted
 if is_zinc: 
@@ -148,7 +150,7 @@ else:
         fig.add_trace(go.Scatter(x=[active_current], y=[active_force], mode='markers', marker=dict(color='white', size=12, symbol='cross'), name='Operating Point'))
         fig.update_layout(xaxis_title="Current (A)", yaxis_title="Force (kg)", template="plotly_dark", height=460, margin=dict(l=40, r=40, b=40, t=40), legend=dict(yanchor="top", y=0.99, xanchor="left", x=0.01))
 
-    # --- SANITIZED TRANSIENT 3-PLY CANVAS EMULATOR ---
+    # --- CANVAS HTML GENERATION WITH ASYMMETRIC BIAS ENGINE ---
     ply3_legend_html = "<div style='display: flex; align-items: center; gap: 4px;'><span style='width: 10px; height: 7px; background-color: rgba(220,160,220,0.25); border:1px solid rgba(220,160,220,0.7);'></span> Ply 3</div>" if use_ply3 else ""
     
     canvas_html = """
@@ -245,20 +247,17 @@ else:
             const startY = centerY - (totalStackH / 2);
 
             // --- 1. MATERIAL PLY STRUCTURE ASSEMBLY ---
-            // Ply 1 (Top Layer)
             ctx.fillStyle = 'rgba(100, 149, 237, 0.25)';
             ctx.strokeStyle = 'rgba(100, 149, 237, 0.7)';
             ctx.lineWidth = 1.5;
             ctx.fillRect(centerX - wBox/2, startY, wBox, h1);
             ctx.strokeRect(centerX - wBox/2, startY, wBox, h1);
 
-            // Ply 2 (Middle Layer)
             ctx.fillStyle = 'rgba(144, 238, 144, 0.25)';
             ctx.strokeStyle = 'rgba(144, 238, 144, 0.7)';
             ctx.fillRect(centerX - wBox/2, startY + h1, wBox, h2);
             ctx.strokeRect(centerX - wBox/2, startY + h1, wBox, h2);
 
-            // Ply 3 (Optional Bottom Layer)
             if (usePly3) {
                 ctx.fillStyle = 'rgba(220, 160, 220, 0.25)';
                 ctx.strokeStyle = 'rgba(220, 160, 220, 0.7)';
@@ -309,10 +308,8 @@ else:
                 const penetrationProgress = Math.min(1.0, 0.4 + (data.cycle / maxTime) * 0.6);
                 const hPenetration = ((totalStackH * 0.76) / 2) * penetrationProgress;
 
-                // Physics Migration Calculation for 3-Ply configurations
                 let balanceY = 0;
                 if (usePly3) {
-                    // Balance offset calculation across all three dimensional thicknesses
                     const midPointH = totalStackH / 2;
                     const centerOfMass = (h1 * (h1/2) + h2 * (h1 + h2/2) + h3 * (h1 + h2 + h3/2)) / totalStackH;
                     balanceY = centerOfMass - midPointH;
@@ -389,7 +386,7 @@ else:
     </script>
     """
 
-    # --- PERFECT ALIGNED LAYOUT COLUMNS ---
+    # --- RENDER GRAPHICS MATRIX ---
     col1, col2 = st.columns([1, 1])
     with col1: 
         st.plotly_chart(fig, use_container_width=True)
@@ -398,16 +395,47 @@ else:
         
     st.divider()
     
-    # Bottom Analytic Metrics Cards
+    # --- PHYSICAL EVALUATION OPERATIONS ---
     tip_eff_calc = (6.0 / d_tip)**2
     final_dia_calc = k_approx * ((active_current * tip_eff_calc)/10000)**2 * (active_time/10) * (300/active_force)**0.25 * 5.5
     expulsion_threshold_calc = (5.5 * np.sqrt(t_min)) * (active_force / 300)**0.1 * (d_tip / 6.0)**0.2
     
-    # Calculate Predicted Tensile Shear Strength (kN)
-    predicted_shear_force = (np.pi * (final_dia_calc ** 2) / 4.0) * uts_weighted / 1000.0
+    # Mechanical Structural Equations
+    predicted_tss = (np.pi * (final_dia_calc ** 2) / 4.0) * uts_weighted / 1000.0
+    predicted_cts = predicted_tss * (0.24 + 0.36 * (1.0 - ce_weighted)) # Empirical CTS out-of-plane mapping
+    ductility_ratio = predicted_cts / predicted_tss if predicted_tss > 0 else 0
     
+    # Metallurgical Hardness Formulations
+    peak_fz_hardness = 120 + 720 * ce_weighted
+    haz_softening_ratio = 0.84 if ce_weighted > 0.18 else 0.96
+    min_haz_hardness = peak_fz_hardness * haz_softening_ratio
+
+    # Fracture Mode Prediction Selection Matrix
+    if final_dia_calc < target_min:
+        predicted_failure_mode = "❌ Interfacial Shear Failure (Brittle Weld)"
+    elif (uts_weighted > 780) and (ce_weighted > 0.20):
+        predicted_failure_mode = "⚠️ Partial Plug / HAZ Necking Failure (Borderline High Strength)"
+    else:
+        predicted_failure_mode = "✅ Full Button Pullout Failure (Ductile Base Material Overload)"
+
+    # --- METRICS REPORT PANELS ---
+    st.subheader("📊 Geometric, Mechanical, & Metallurgical Performance Engine")
+    
+    # Row 1: Traditional Geometry and Basic Shear Strength
     m1, m2, m3, m4 = st.columns(4)
-    m1.metric("Final Cycle Size", f"{round(final_dia_calc, 3)} mm")
-    m2.metric("Target Minimum Bound", f"{round(target_min, 2)} mm")
-    m3.metric("Expulsion Threshold Limit", f"{round(expulsion_threshold_calc, 2)} mm")
-    m4.metric("Est. Shear Strength (TSS)", f"{round(predicted_shear_force, 2)} kN")
+    m1.metric("Final Nugget Size", f"{round(final_dia_calc, 3)} mm")
+    m2.metric("Target Min Bound", f"{round(target_min, 2)} mm")
+    m3.metric("Expulsion Threshold", f"{round(expulsion_threshold_calc, 2)} mm")
+    m4.metric("Tensile Shear (TSS)", f"{round(predicted_tss, 2)} kN")
+    
+    st.write("") # Whitespace divider
+    
+    # Row 2: Advanced FEA Suite Analysis (SORPAS Calibration Metrics)
+    c1, c2, c3, c4 = st.columns(4)
+    c1.metric("Cross-Tension (CTS)", f"{round(predicted_cts, 2)} kN")
+    c2.metric("Ductility Ratio (CTS/TSS)", f"{round(ductility_ratio, 3)}")
+    c3.metric("Peak Fusion Hardness", f"{round(peak_fz_hardness, 1)} HV")
+    c4.metric("Minimum HAZ Hardness", f"{round(min_haz_hardness, 1)} HV")
+    
+    st.write("")
+    st.info(f"**Predicted Dynamic Failure Mechanism:** {predicted_failure_mode}")
