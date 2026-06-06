@@ -1,4 +1,4 @@
-# Asari-Rashidi Spot Welding Model (Special Edition - Strength Prediction Mode)
+# Asari-Rashidi Spot Welding Model (Special Edition - Asymmetric Growth & Strength Mode)
 import streamlit as st
 import numpy as np
 import plotly.graph_objects as go
@@ -6,7 +6,7 @@ import streamlit.components.v1 as components
 
 # --- CONFIGURATION ---
 st.set_page_config(page_title="Spot Welding Lobe Simulator", layout="wide")
-st.title("🔬 Real-Time Transient Nugget Growth & Strength Simulator")
+st.title("🔬 Real-Time Transient Nugget Growth & Asymmetric Penetration Simulator")
 
 # --- MATERIAL DATABASE WITH MECHANICAL PROPERTIES ---
 materials_db = {
@@ -47,63 +47,32 @@ with st.sidebar:
 
     st.divider()
     st.header("1. Sheet Geometry Layers")
-    
-    # Ply 1 (Top)
     mat1 = st.selectbox("Ply 1 Material (Top)", list(materials_db.keys()))
     t1 = st.slider("Thickness 1 (mm)", 0.5, 3.0, 1.0)
     
-    # Ply 2 (Middle/Bottom)
-    mat2 = st.selectbox("Ply 2 Material (Middle)", list(materials_db.keys()), index=2)
+    mat2 = st.selectbox("Ply 2 Material (Bottom)", list(materials_db.keys()), index=2)
     t2 = st.slider("Thickness 2 (mm)", 0.5, 3.0, 1.2)
-
-    # Ply 3 (Optional Bottom Layer)
-    ply3_options = ["None (Revert to 2-Ply)"] + list(materials_db.keys())
-    mat3_selection = st.selectbox("Ply 3 Material (Bottom)", ply3_options, index=0)
-    
-    use_ply3 = mat3_selection != "None (Revert to 2-Ply)"
-    if use_ply3:
-        t3 = st.slider("Thickness 3 (mm)", 0.5, 3.0, 0.8)
-    else:
-        t3 = 0.0
 
     st.header("2. Electrodes & Scalers")
     is_zinc = st.checkbox("Zinc Coated (GA/GI)?")
     d_tip = st.slider("Tip Diameter (mm)", 4.0, 10.0, 6.0)
     k_base = st.slider("Base k-factor", 0.10, 0.60, 0.35)
 
-# --- MATHEMATICAL COMPILATION ENGINE ---
-m1_p = materials_db[mat1]
-m2_p = materials_db[mat2]
-
-if use_ply3:
-    m3_p = materials_db[mat3_selection]
-    total_t = t1 + t2 + t3
-    t_min = min(t1, t2, t3)
-    
-    k_mod_weighted = (t1 * m1_p["k_mod"] + t2 * m2_p["k_mod"] + t3 * m3_p["k_mod"]) / total_t
-    res_weighted = (t1 * m1_p["res_factor"] + t2 * m2_p["res_factor"] + t3 * m3_p["res_factor"]) / total_t
-    # Thickness-weighted ultimate tensile strength calculation
-    uts_weighted = (t1 * m1_p["uts"] + t2 * m2_p["uts"] + t3 * m3_p["uts"]) / total_t
-else:
-    total_t = t1 + t2
-    t_min = min(t1, t2)
-    k_mod_weighted = (t1 * m1_p["k_mod"] + t2 * m2_p["k_mod"]) / total_t
-    res_weighted = (t1 * m1_p["res_factor"] + t2 * m2_p["res_factor"]) / total_t
-    uts_weighted = (t1 * m1_p["uts"] + t2 * m2_p["uts"]) / total_t
-
-k_approx = k_base * k_mod_weighted * res_weighted
-if is_zinc: 
-    k_approx *= 0.82
-
-tip_eff = (6.0 / d_tip)**2
-target_min = 4 * np.sqrt(t_min)
-
-# --- GRID CONTROLLER AXES ---
+# --- GLOBAL MACROS AND CONSTANTS ---
+total_t = t1 + t2
+t_min = min(t1, t2)
 currents = np.linspace(5000, 13000, 50)  
 times = np.linspace(3, 24, 40)
 forces = np.linspace(100, 450, 40)
 
-# --- 3D ISOSURFACE LOOPS ---
+m1_p, m2_p = materials_db[mat1], materials_db[mat2]
+k_approx = k_base * ((t1*m1_p["k_mod"] + t2*m2_p["k_mod"])/total_t) * ((t1*m1_p["res_factor"] + t2*m2_p["res_factor"])/total_t)
+if is_zinc: k_approx *= 0.82
+tip_eff = (6.0 / d_tip)**2
+target_min = 4 * np.sqrt(t_min)
+uts_weighted = (t1 * m1_p["uts"] + t2 * m2_p["uts"]) / total_t
+
+# --- INTERACTIVE VIEW GENERATION ---
 if graph_mode == "Complete 3D Volumetric Lobe":
     I, T, F = np.meshgrid(currents, times, forces)
     nugget_growth = k_approx * ((I * tip_eff)/10000)**2 * (T/10) * (300/F)**0.25 * 5.5
@@ -119,8 +88,8 @@ if graph_mode == "Complete 3D Volumetric Lobe":
     )
     st.plotly_chart(fig, use_container_width=True)
 
-# --- 2D CROSS-SECTION PLANE INTERACTIVE VIEW ---
 else:
+    # --- 2D PLANE CONTOUR SETUP ---
     if "X-Y Plane" in slice_plane:
         I_2d, T_2d = np.meshgrid(currents, times)
         nugget_growth_2d = k_approx * ((I_2d * tip_eff)/10000)**2 * (T_2d/10) * (300/slice_force)**0.25 * 5.5
@@ -146,15 +115,14 @@ else:
                                  contours=dict(start=target_min, end=target_min), line=dict(color='cyan', width=4), name='Min Target'))
         fig.add_trace(go.Contour(x=currents, y=forces, z=(nugget_growth_2d - exp_limit_2d), showscale=False, contours_coloring='none',
                                  contours=dict(start=0, end=0), line=dict(color='red', width=4, dash='dash'), name='Expulsion Limit'))
+        
         fig.add_trace(go.Scatter(x=[active_current], y=[active_force], mode='markers', marker=dict(color='white', size=12, symbol='cross'), name='Operating Point'))
         fig.update_layout(xaxis_title="Current (A)", yaxis_title="Force (kg)", template="plotly_dark", height=460, margin=dict(l=40, r=40, b=40, t=40), legend=dict(yanchor="top", y=0.99, xanchor="left", x=0.01))
 
-    # --- SANITIZED TRANSIENT 3-PLY CANVAS EMULATOR ---
-    ply3_legend_html = "<div style='display: flex; align-items: center; gap: 4px;'><span style='width: 10px; height: 7px; background-color: rgba(220,160,220,0.25); border:1px solid rgba(220,160,220,0.7);'></span> Ply 3</div>" if use_ply3 else ""
-    
+    # --- BALANCED EMBEDDED TRANSIENT ASYMMETRIC SIMULATOR ---
     canvas_html = """
     <div style="background-color: #111111; padding: 12px 15px; border-radius: 8px; font-family: sans-serif; color: white; display: flex; flex-direction: column; height: 460px; box-sizing: border-box; justify-content: space-between;">
-        <h4 style="margin: 0; color: #E0E0E0; font-size: 14px; font-weight: 600;">Transient Nugget Thermal Development Map (Multi-Ply Mode)</h4>
+        <h4 style="margin: 0; color: #E0E0E0; font-size: 14px; font-weight: 600;">Transient Nugget Thermal Development Map (Asymmetric Model)</h4>
         
         <div style="display: flex; gap: 15px; align-items: center; justify-content: center; flex-grow: 1; margin: 5px 0;">
             <canvas id="weldCanvas" width="440" height="270" style="background-color: #1e1e1e; border: 1px solid #333; border-radius: 4px;"></canvas>
@@ -171,7 +139,6 @@ else:
             <div style="display: flex; flex-wrap: wrap; gap: 10px; justify-content: center; font-size: 10px; color: #BBBBBB; margin-bottom: 8px;">
                 <div style="display: flex; align-items: center; gap: 4px;"><span style="width: 10px; height: 7px; background-color: rgba(100,149,237,0.25); border:1px solid rgba(100,149,237,0.7);"></span> Ply 1</div>
                 <div style="display: flex; align-items: center; gap: 4px;"><span style="width: 10px; height: 7px; background-color: rgba(144,238,144,0.25); border:1px solid rgba(144,238,144,0.7);"></span> Ply 2</div>
-                """ + ply3_legend_html + """
                 <div style="display: flex; align-items: center; gap: 4px;"><span style="width: 10px; height: 7px; background: linear-gradient(to right, #ff4500, #b4b4b4);"></span> Tip Thermal</div>
                 <div style="display: flex; align-items: center; gap: 4px;"><span style="width: 10px; height: 7px; background-color: rgba(255,140,0,0.22);"></span> HAZ</div>
                 <div style="display: flex; align-items: center; gap: 4px;"><span style="width: 10px; height: 7px; background: radial-gradient(#fff, #9400d3); border:1px solid #ffff00;"></span> Melt Pool</div>
@@ -188,8 +155,6 @@ else:
     <script>
         const t1 = """ + str(t1) + """;
         const t2 = """ + str(t2) + """;
-        const t3 = """ + str(t3) + """;
-        const usePly3 = """ + str(use_ply3).lower() + """;
         const dTip = """ + str(d_tip) + """;
         const maxTime = """ + str(active_time) + """;
         const currentI = """ + str(active_current) + """;
@@ -207,7 +172,7 @@ else:
         function computeTransientTimeline() {
             simData = [];
             const tipEff = Math.pow(6.0 / dTip, 2);
-            const tMin = usePly3 ? Math.min(t1, t2, t3) : Math.min(t1, t2);
+            const tMin = Math.min(t1, t2);
             const expulsionThreshold = (5.5 * Math.sqrt(tMin)) * Math.pow(forceF / 300, 0.1) * Math.pow(dTip / 6.0, 0.2);
 
             for (let c = 1; c <= maxTime; c++) {
@@ -230,48 +195,35 @@ else:
             
             const centerX = canvas.width / 2;
             const centerY = canvas.height / 2;
-            const scale = 32; 
+            const scale = 40; // Scaled up slightly for clear visualization
             const wBox = dTip * 2.8 * scale;
             
             const h1 = t1 * scale;
             const h2 = t2 * scale;
-            const h3 = t3 * scale;
-            
             const tipRadiusX = (dTip / 2) * scale;
             const dia = data.diameter;
             const expulsion = data.expulsion;
             const thermalProgress = data.cycle / maxTime;
 
-            const totalStackH = usePly3 ? (h1 + h2 + h3) : (h1 + h2);
-            let currentYCursor = centerY - (totalStackH / 2);
+            // --- 1. DYNAMIC ASYMMETRIC POSITIONING ---
+            // Fix sheet arrangement so contact interface is baseline 0, meaning Y position balances sheets correctly.
+            const startY = centerY - h1;
 
-            // --- 1. MATERIAL PLY STRUCTURES ---
+            // Ply 1 (Top Sheet)
             ctx.fillStyle = 'rgba(100, 149, 237, 0.25)';
             ctx.strokeStyle = 'rgba(100, 149, 237, 0.7)';
             ctx.lineWidth = 1.5;
-            ctx.fillRect(centerX - wBox/2, currentYCursor, wBox, h1);
-            ctx.strokeRect(centerX - wBox/2, currentYCursor, wBox, h1);
-            const topTipY = currentYCursor;
-            currentYCursor += h1;
+            ctx.fillRect(centerX - wBox/2, startY, wBox, h1);
+            ctx.strokeRect(centerX - wBox/2, startY, wBox, h1);
 
+            // Ply 2 (Bottom Sheet)
             ctx.fillStyle = 'rgba(144, 238, 144, 0.25)';
             ctx.strokeStyle = 'rgba(144, 238, 144, 0.7)';
-            ctx.fillRect(centerX - wBox/2, currentYCursor, wBox, h2);
-            ctx.strokeRect(centerX - wBox/2, currentYCursor, wBox, h2);
-            const nuggetCenterY = currentYCursor + (usePly3 ? (h2 / 2) : 0);
-            currentYCursor += h2;
-
-            if (usePly3) {
-                ctx.fillStyle = 'rgba(220, 160, 220, 0.25)';
-                ctx.strokeStyle = 'rgba(220, 160, 220, 0.7)';
-                ctx.fillRect(centerX - wBox/2, currentYCursor, wBox, h3);
-                ctx.strokeRect(centerX - wBox/2, currentYCursor, wBox, h3);
-                currentYCursor += h3;
-            }
-            const botTipY = currentYCursor;
+            ctx.fillRect(centerX - wBox/2, centerY, wBox, h2);
+            ctx.strokeRect(centerX - wBox/2, centerY, wBox, h2);
 
             // --- 2. ELECTRODES TRANSIENT THERMAL FOOTPRINTS ---
-            let topGrad = ctx.createLinearGradient(centerX, topTipY, centerX, topTipY - 30);
+            let topGrad = ctx.createLinearGradient(centerX, startY, centerX, startY - 30);
             if (dia > 0) {
                 let tipHeatColor = "rgba(" + Math.floor(200 + 55 * thermalProgress) + ", " + Math.floor(69 + 40 * thermalProgress) + ", 0, 0.85)";
                 topGrad.addColorStop(0, tipHeatColor);
@@ -282,14 +234,14 @@ else:
             }
             ctx.fillStyle = topGrad;
             ctx.beginPath();
-            ctx.moveTo(centerX - tipRadiusX, topTipY);
-            ctx.lineTo(centerX + tipRadiusX, topTipY);
-            ctx.lineTo(centerX + tipRadiusX * 1.4, topTipY - 30);
-            ctx.lineTo(centerX - tipRadiusX * 1.4, topTipY - 30);
+            ctx.moveTo(centerX - tipRadiusX, startY);
+            ctx.lineTo(centerX + tipRadiusX, startY);
+            ctx.lineTo(centerX + tipRadiusX * 1.4, startY - 30);
+            ctx.lineTo(centerX - tipRadiusX * 1.4, startY - 30);
             ctx.closePath();
             ctx.fill();
 
-            let botGrad = ctx.createLinearGradient(centerX, botTipY, centerX, botTipY + 30);
+            let botGrad = ctx.createLinearGradient(centerX, centerY + h2, centerX, centerY + h2 + 30);
             if (dia > 0) {
                 let tipHeatColor = "rgba(" + Math.floor(200 + 55 * thermalProgress) + ", " + Math.floor(69 + 40 * thermalProgress) + ", 0, 0.85)";
                 botGrad.addColorStop(0, tipHeatColor);
@@ -300,25 +252,31 @@ else:
             }
             ctx.fillStyle = botGrad;
             ctx.beginPath();
-            ctx.moveTo(centerX - tipRadiusX, botTipY);
-            ctx.lineTo(centerX + tipRadiusX, botTipY);
-            ctx.lineTo(centerX + tipRadiusX * 1.4, botTipY + 30);
-            ctx.lineTo(centerX - tipRadiusX * 1.4, botTipY + 30);
+            ctx.moveTo(centerX - tipRadiusX, centerY + h2);
+            ctx.lineTo(centerX + tipRadiusX, centerY + h2);
+            ctx.lineTo(centerX + tipRadiusX * 1.4, centerY + h2 + 30);
+            ctx.lineTo(centerX - tipRadiusX * 1.4, centerY + h2 + 30);
             ctx.closePath();
             ctx.fill();
 
-            // --- 3. DYNAMIC METRIC NUGGET & HAZ SHIFT ---
+            // --- 3. PHYSICS ASYMMETRIC NUGGET CENTER DISPLACEMENT ---
             if (dia > 0.05) {
                 const rNugget = (dia / 2) * scale;
                 const penetrationProgress = Math.min(1.0, 0.4 + (data.cycle / maxTime) * 0.6);
-                const hPenetration = ((totalStackH * 0.76) / 2) * penetrationProgress;
+                const hPenetration = (((t1 + t2) * 0.76) / 2) * scale * penetrationProgress;
 
+                // Dynamic Shift Logic: Migrates nugget core downward if t2 > t1, upward if t1 > t2
+                const thermalMigrationBias = 0.22; 
+                const dynamicCenterY = centerY + ((t2 - t1) * scale * thermalMigrationBias * thermalProgress);
+
+                // HAZ Boundary Ring
                 ctx.fillStyle = 'rgba(255, 140, 0, 0.22)';
                 ctx.beginPath();
-                ctx.ellipse(centerX, nuggetCenterY, rNugget * 1.28, hPenetration * 1.15, 0, 0, 2 * Math.PI);
+                ctx.ellipse(centerX, dynamicCenterY, rNugget * 1.28, hPenetration * 1.15, 0, 0, 2 * Math.PI);
                 ctx.fill();
 
-                let poolGrad = ctx.createRadialGradient(centerX, nuggetCenterY, rNugget * 0.1, centerX, nuggetCenterY, rNugget);
+                // Core Molten Thermal Gradient
+                let poolGrad = ctx.createRadialGradient(centerX, dynamicCenterY, rNugget * 0.1, centerX, dynamicCenterY, rNugget);
                 if (dia >= expulsion) {
                     poolGrad.addColorStop(0, '#ffffff');
                     poolGrad.addColorStop(0.2, '#ffff00');
@@ -336,7 +294,7 @@ else:
                 ctx.fillStyle = poolGrad;
                 ctx.lineWidth = 2;
                 ctx.beginPath();
-                ctx.ellipse(centerX, nuggetCenterY, rNugget, hPenetration, 0, 0, 2 * Math.PI);
+                ctx.ellipse(centerX, dynamicCenterY, rNugget, hPenetration, 0, 0, 2 * Math.PI);
                 ctx.fill();
                 ctx.stroke();
             }
@@ -393,7 +351,6 @@ else:
     expulsion_threshold_calc = (5.5 * np.sqrt(t_min)) * (active_force / 300)**0.1 * (d_tip / 6.0)**0.2
     
     # Calculate Predicted Tensile Shear Strength (kN)
-    # Area = (pi * d^2) / 4. Force = Area * UTS. Divide by 1000 for kN.
     predicted_shear_force = (np.pi * (final_dia_calc ** 2) / 4.0) * uts_weighted / 1000.0
     
     m1, m2, m3, m4 = st.columns(4)
