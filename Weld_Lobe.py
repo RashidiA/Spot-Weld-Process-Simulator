@@ -1,4 +1,4 @@
-# Asari-Rashidi Spot Welding Model (Special Edition - 3-Ply Extended)
+# Asari-Rashidi Spot Welding Model (Special Edition - 3-Ply Extended Fixed)
 import streamlit as st
 import numpy as np
 import plotly.graph_objects as go
@@ -80,7 +80,6 @@ if use_ply3:
     total_t = t1 + t2 + t3
     t_min = min(t1, t2, t3)
     
-    # Thickness-weighted resistivity and modifiers for 3-ply stack
     k_mod_weighted = (t1 * m1_p["k_mod"] + t2 * m2_p["k_mod"] + t3 * m3_p["k_mod"]) / total_t
     res_weighted = (t1 * m1_p["res_factor"] + t2 * m2_p["res_factor"] + t3 * m3_p["res_factor"]) / total_t
 else:
@@ -147,8 +146,10 @@ else:
         fig.add_trace(go.Scatter(x=[active_current], y=[active_force], mode='markers', marker=dict(color='white', size=12, symbol='cross'), name='Operating Point'))
         fig.update_layout(xaxis_title="Current (A)", yaxis_title="Force (kg)", template="plotly_dark", height=460, margin=dict(l=40, r=40, b=40, t=40), legend=dict(yanchor="top", y=0.99, xanchor="left", x=0.01))
 
-    # --- UPGRADED TRANSIENT 3-PLY CANVAS EMULATOR ---
-    canvas_html = f"""
+    # --- SANITIZED TRANSIENT 3-PLY CANVAS EMULATOR (NO F-STRING BREAKS) ---
+    ply3_legend_html = "<div style='display: flex; align-items: center; gap: 4px;'><span style='width: 10px; height: 7px; background-color: rgba(220,160,220,0.25); border:1px solid rgba(220,160,220,0.7);'></span> Ply 3</div>" if use_ply3 else ""
+    
+    canvas_html = """
     <div style="background-color: #111111; padding: 12px 15px; border-radius: 8px; font-family: sans-serif; color: white; display: flex; flex-direction: column; height: 460px; box-sizing: border-box; justify-content: space-between;">
         <h4 style="margin: 0; color: #E0E0E0; font-size: 14px; font-weight: 600;">Transient Nugget Thermal Development Map (Multi-Ply Mode)</h4>
         
@@ -167,7 +168,7 @@ else:
             <div style="display: flex; flex-wrap: wrap; gap: 10px; justify-content: center; font-size: 10px; color: #BBBBBB; margin-bottom: 8px;">
                 <div style="display: flex; align-items: center; gap: 4px;"><span style="width: 10px; height: 7px; background-color: rgba(100,149,237,0.25); border:1px solid rgba(100,149,237,0.7);"></span> Ply 1</div>
                 <div style="display: flex; align-items: center; gap: 4px;"><span style="width: 10px; height: 7px; background-color: rgba(144,238,144,0.25); border:1px solid rgba(144,238,144,0.7);"></span> Ply 2</div>
-                {"<div style='display: flex; align-items: center; gap: 4px;'><span style='width: 10px; height: 7px; background-color: rgba(220,160,220,0.25); border:1px solid rgba(220,160,220,0.7);'></span> Ply 3</div>" if use_ply3 else ""}
+                """ + ply3_legend_html + """
                 <div style="display: flex; align-items: center; gap: 4px;"><span style="width: 10px; height: 7px; background: linear-gradient(to right, #ff4500, #b4b4b4);"></span> Tip Thermal</div>
                 <div style="display: flex; align-items: center; gap: 4px;"><span style="width: 10px; height: 7px; background-color: rgba(255,140,0,0.22);"></span> HAZ</div>
                 <div style="display: flex; align-items: center; gap: 4px;"><span style="width: 10px; height: 7px; background: radial-gradient(#fff, #9400d3); border:1px solid #ffff00;"></span> Melt Pool</div>
@@ -182,16 +183,16 @@ else:
     </div>
 
     <script>
-        const t1 = {t1};
-        const t2 = {t2};
-        const t3 = {t3};
-        const usePly3 = {str(use_ply3).lower()};
-        const dTip = {d_tip};
-        const maxTime = {active_time};
-        const currentI = {active_current};
-        const forceF = {active_force};
-        const kApprox = {k_approx};
-        const targetMin = {target_min};
+        const t1 = """ + str(t1) + """;
+        const t2 = """ + str(t2) + """;
+        const t3 = """ + str(t3) + """;
+        const usePly3 = """ + str(use_ply3).lower() + """;
+        const dTip = """ + str(d_tip) + """;
+        const maxTime = """ + str(active_time) + """;
+        const currentI = """ + str(active_current) + """;
+        const forceF = """ + str(active_force) + """;
+        const kApprox = """ + str(k_approx) + """;
+        const targetMin = """ + str(target_min) + """;
 
         const canvas = document.getElementById('weldCanvas');
         const ctx = canvas.getContext('2d');
@@ -238,12 +239,10 @@ else:
             const expulsion = data.expulsion;
             const thermalProgress = data.cycle / maxTime;
 
-            // Calculate Stack offsets to center the stack perfectly vertically
             const totalStackH = usePly3 ? (h1 + h2 + h3) : (h1 + h2);
             let currentYCursor = centerY - (totalStackH / 2);
 
             // --- 1. MATERIAL PLY STRUCTURES ---
-            // Ply 1
             ctx.fillStyle = 'rgba(100, 149, 237, 0.25)';
             ctx.strokeStyle = 'rgba(100, 149, 237, 0.7)';
             ctx.lineWidth = 1.5;
@@ -252,15 +251,13 @@ else:
             const topTipY = currentYCursor;
             currentYCursor += h1;
 
-            // Ply 2
             ctx.fillStyle = 'rgba(144, 238, 144, 0.25)';
             ctx.strokeStyle = 'rgba(144, 238, 144, 0.7)';
             ctx.fillRect(centerX - wBox/2, currentYCursor, wBox, h2);
             ctx.strokeRect(centerX - wBox/2, currentYCursor, wBox, h2);
-            const nuggetCenterY = currentYCursor + (usePly3 ? (h2 / 2) : 0); // shift nugget to weld interface
+            const nuggetCenterY = currentYCursor + (usePly3 ? (h2 / 2) : 0);
             currentYCursor += h2;
 
-            // Ply 3 (if active)
             if (usePly3) {
                 ctx.fillStyle = 'rgba(220, 160, 220, 0.25)';
                 ctx.strokeStyle = 'rgba(220, 160, 220, 0.7)';
@@ -313,13 +310,11 @@ else:
                 const penetrationProgress = Math.min(1.0, 0.4 + (data.cycle / maxTime) * 0.6);
                 const hPenetration = ((totalStackH * 0.76) / 2) * penetrationProgress;
 
-                // HAZ Boundary Simulation Ring
                 ctx.fillStyle = 'rgba(255, 140, 0, 0.22)';
                 ctx.beginPath();
                 ctx.ellipse(centerX, nuggetCenterY, rNugget * 1.28, hPenetration * 1.15, 0, 0, 2 * Math.PI);
                 ctx.fill();
 
-                // Core Molten Thermal Gradient
                 let poolGrad = ctx.createRadialGradient(centerX, nuggetCenterY, rNugget * 0.1, centerX, nuggetCenterY, rNugget);
                 if (dia >= expulsion) {
                     poolGrad.addColorStop(0, '#ffffff');
