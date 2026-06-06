@@ -1,4 +1,4 @@
-# Asari-Rashidi Spot Welding Model (Special Edition - 3-Ply Extended Fixed)
+# Asari-Rashidi Spot Welding Model (Special Edition - Strength Prediction Mode)
 import streamlit as st
 import numpy as np
 import plotly.graph_objects as go
@@ -6,16 +6,16 @@ import streamlit.components.v1 as components
 
 # --- CONFIGURATION ---
 st.set_page_config(page_title="Spot Welding Lobe Simulator", layout="wide")
-st.title("🔬 Real-Time Transient Nugget Growth Simulator (3-Ply Automotive Edition)")
+st.title("🔬 Real-Time Transient Nugget Growth & Strength Simulator")
 
-# --- MATERIAL DATABASE ---
+# --- MATERIAL DATABASE WITH MECHANICAL PROPERTIES ---
 materials_db = {
-    "Mild Steel (JSC270)": {"res_factor": 1.0, "k_mod": 1.0, "ce": 0.08},
-    "High Strength (JSC440)": {"res_factor": 1.15, "k_mod": 1.05, "ce": 0.14},
-    "DP600 (Dual Phase)": {"res_factor": 1.35, "k_mod": 1.12, "ce": 0.18},
-    "DP980 (Ultra High Strength)": {"res_factor": 1.50, "k_mod": 1.20, "ce": 0.24},
-    "Boron Steel (Usibor 1500)": {"res_factor": 1.65, "k_mod": 1.25, "ce": 0.35},
-    "Trip Steel (TRIP780)": {"res_factor": 1.40, "k_mod": 1.15, "ce": 0.22}
+    "Mild Steel (JSC270)": {"res_factor": 1.0, "k_mod": 1.0, "ce": 0.08, "uts": 270},
+    "High Strength (JSC440)": {"res_factor": 1.15, "k_mod": 1.05, "ce": 0.14, "uts": 440},
+    "DP600 (Dual Phase)": {"res_factor": 1.35, "k_mod": 1.12, "ce": 0.18, "uts": 600},
+    "DP980 (Ultra High Strength)": {"res_factor": 1.50, "k_mod": 1.20, "ce": 0.24, "uts": 980},
+    "Boron Steel (Usibor 1500)": {"res_factor": 1.65, "k_mod": 1.25, "ce": 0.35, "uts": 1500},
+    "Trip Steel (TRIP780)": {"res_factor": 1.40, "k_mod": 1.15, "ce": 0.22, "uts": 780}
 }
 
 # --- USER INPUT PANEL ---
@@ -82,11 +82,14 @@ if use_ply3:
     
     k_mod_weighted = (t1 * m1_p["k_mod"] + t2 * m2_p["k_mod"] + t3 * m3_p["k_mod"]) / total_t
     res_weighted = (t1 * m1_p["res_factor"] + t2 * m2_p["res_factor"] + t3 * m3_p["res_factor"]) / total_t
+    # Thickness-weighted ultimate tensile strength calculation
+    uts_weighted = (t1 * m1_p["uts"] + t2 * m2_p["uts"] + t3 * m3_p["uts"]) / total_t
 else:
     total_t = t1 + t2
     t_min = min(t1, t2)
     k_mod_weighted = (t1 * m1_p["k_mod"] + t2 * m2_p["k_mod"]) / total_t
     res_weighted = (t1 * m1_p["res_factor"] + t2 * m2_p["res_factor"]) / total_t
+    uts_weighted = (t1 * m1_p["uts"] + t2 * m2_p["uts"]) / total_t
 
 k_approx = k_base * k_mod_weighted * res_weighted
 if is_zinc: 
@@ -146,7 +149,7 @@ else:
         fig.add_trace(go.Scatter(x=[active_current], y=[active_force], mode='markers', marker=dict(color='white', size=12, symbol='cross'), name='Operating Point'))
         fig.update_layout(xaxis_title="Current (A)", yaxis_title="Force (kg)", template="plotly_dark", height=460, margin=dict(l=40, r=40, b=40, t=40), legend=dict(yanchor="top", y=0.99, xanchor="left", x=0.01))
 
-    # --- SANITIZED TRANSIENT 3-PLY CANVAS EMULATOR (NO F-STRING BREAKS) ---
+    # --- SANITIZED TRANSIENT 3-PLY CANVAS EMULATOR ---
     ply3_legend_html = "<div style='display: flex; align-items: center; gap: 4px;'><span style='width: 10px; height: 7px; background-color: rgba(220,160,220,0.25); border:1px solid rgba(220,160,220,0.7);'></span> Ply 3</div>" if use_ply3 else ""
     
     canvas_html = """
@@ -389,7 +392,12 @@ else:
     final_dia_calc = k_approx * ((active_current * tip_eff_calc)/10000)**2 * (active_time/10) * (300/active_force)**0.25 * 5.5
     expulsion_threshold_calc = (5.5 * np.sqrt(t_min)) * (active_force / 300)**0.1 * (d_tip / 6.0)**0.2
     
-    m1, m2, m3 = st.columns(3)
+    # Calculate Predicted Tensile Shear Strength (kN)
+    # Area = (pi * d^2) / 4. Force = Area * UTS. Divide by 1000 for kN.
+    predicted_shear_force = (np.pi * (final_dia_calc ** 2) / 4.0) * uts_weighted / 1000.0
+    
+    m1, m2, m3, m4 = st.columns(4)
     m1.metric("Final Cycle Size", f"{round(final_dia_calc, 3)} mm")
     m2.metric("Target Minimum Bound", f"{round(target_min, 2)} mm")
     m3.metric("Expulsion Threshold Limit", f"{round(expulsion_threshold_calc, 2)} mm")
+    m4.metric("Est. Shear Strength (TSS)", f"{round(predicted_shear_force, 2)} kN")
