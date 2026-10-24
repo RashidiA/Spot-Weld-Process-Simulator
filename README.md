@@ -3,7 +3,9 @@
 ## Overview
 This interactive engineering platform offers real-time visualization and multi-axis parametric mapping of the process operating window (Weld Lobe) for automotive sheet steel assemblies. Driven by the proprietary **Asari-Rashidi Nugget Growth Model**, the simulator predicts thermodynamic and physical bonding thresholds across multi-ply material stacks.
 
-The simulator bridges the gap between raw experimental values and finite element method (FEM) software (such as SORPAS) by instantly solving thickness-weighted resistivity scaling, thermal sink profiles, and expulsion limits.
+The simulator bridges the gap between raw experimental values and finite element method (FEM) software (such as SORPAS) by instantly solving thickness-weighted resistivity scaling, thermal sink profiles, and expulsion limits.  
+
+  Simulator access link : https://spot-weld-process-simulator-jogq55brt4wsqfy8sgonbp.streamlit.app/
 
 ---
 
