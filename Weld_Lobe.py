@@ -232,8 +232,9 @@ with st.sidebar:
 
     st.header("1. Sheet stack")
     if factory:
-        st.caption("Mild steel, 2 panels (equations tuned to factory experiments).")
-        mat1 = mat2 = "Mild Steel (JSC270)"
+        st.caption("2 panels. The factory equations are tuned on mild steel; other grades are scaled from it (see Model notes). AHSS = DP600 / TRIP780 • UHSS = DP980 • HPF = Boron (Usibor 1500).")
+        mat1 = st.selectbox("Ply 1 Material (Top)", list(materials_db.keys()), key="f_m1")
+        mat2 = st.selectbox("Ply 2 Material (Bottom)", list(materials_db.keys()), key="f_m2")
         t1 = st.slider("Thickness 1 (mm)", 0.5, 3.0, 0.65, step=0.05)
         t2 = st.slider("Thickness 2 (mm)", 0.5, 3.0, 0.65, step=0.05)
         mat3_selection, use_ply3, t3 = "None (Revert to 2-Ply)", False, 0.0
@@ -275,8 +276,18 @@ ce_weighted = sum(t * p["ce"] for t, p in zip(layers_t, layers_p)) / total_t
 #                           f = 1.2 if t_min >= 1 else 1.16 ; d = general-spot nugget
 #   nugget diameter    d = sqrt( 4*1.2*I²*0.241e-4*(0.02*cycles) / ((F/F_rec)*9.7*t_total*3.14) )
 # --------------------------------------------------------------------------------------
-F_REC = ((0.3428 * t_min ** 2 + 1.327 * t_min + 0.5865) * 1000.0) / 9.81
+F_REC_MILD = ((0.3428 * t_min ** 2 + 1.327 * t_min + 0.5865) * 1000.0) / 9.81
 C_REC = 10.0 * t_min
+m_heat, f_force = 1.0, 1.0
+with st.sidebar:
+    if factory:
+        with st.expander("Material correction (non-mild steel)"):
+            m_heat = st.number_input("Heat factor m  (nugget Ø ∝ √m)", value=round(res_weighted * k_mod_weighted, 3), step=0.01,
+                                     help="Default = weighted resistivity factor × weighted k-modifier from the material table. Mild steel = 1.0.")
+            f_force = st.number_input("Force factor", value=round(float(np.sqrt(uts_weighted / 270.0)), 3), step=0.01,
+                                      help="Recommended force = mild-steel force × this factor. Default = √(UTS / 270 MPa). Assumption — tune with your own trials.")
+            st.caption("Mild steel = 1.0 / 1.0. These two numbers are assumptions for grades the factory equations were not tuned on.")
+F_REC = F_REC_MILD * f_force
 with st.sidebar:
     with st.expander("Nugget size criteria (× √t_min)"):
         k_gen = st.number_input("General spot  (Ø = k·√t)", value=4.1, step=0.1, help="0.65 + 0.65 mm gives 3.3 mm, as in the factory sheet.")
@@ -285,7 +296,7 @@ with st.sidebar:
         k_exp = st.number_input("Expulsion limit (k·√t)", value=9.0, step=0.1)
         st.caption("These factors were inferred from your Excel lobe table (colour boundaries). Edit them to match your factory standard.")
 GEN_D, IMP_D, HI_D, EXP_D = k_gen * np.sqrt(t_min), k_imp * np.sqrt(t_min), k_hi * np.sqrt(t_min), k_exp * np.sqrt(t_min)
-I_REC_KA = (1.2 if t_min >= 1 else 1.16) * np.sqrt((9.7 * 3.14 * (GEN_D ** 2 / 4.0) * total_t) / (0.24 * (0.0001 * C_REC * 0.02))) / 1000.0
+I_REC_KA = (1.2 if t_min >= 1 else 1.16) * np.sqrt((9.7 * 3.14 * (GEN_D ** 2 / 4.0) * total_t) / (0.24 * (0.0001 * C_REC * 0.02))) / 1000.0 / np.sqrt(m_heat)
 if is_zinc:
     I_REC_KA *= 1.2
 I_REC = I_REC_KA * 1000.0
@@ -334,7 +345,7 @@ else:
 def nugget(I, T, F):
     if factory:
         I_eff = np.asarray(I, dtype=float) / (1.2 if is_zinc else 1.0)   # zinc sheet needs +20 % current for the same nugget
-        return np.sqrt((4 * 1.2 * I_eff ** 2 * 0.241 * 0.0001 * (0.02 * np.asarray(T, dtype=float))) /
+        return np.sqrt((4 * 1.2 * m_heat * I_eff ** 2 * 0.241 * 0.0001 * (0.02 * np.asarray(T, dtype=float))) /
                        ((np.asarray(F, dtype=float) / F_REC) * 9.7 * total_t * 3.14))
     return k_approx * ((I * tip_eff) / 10000.0) ** 2 * (T / 10.0) * (300.0 / F) ** 0.25 * 5.5
 
@@ -349,28 +360,19 @@ forces = np.linspace(F_MIN, F_MAX, 40)
 
 tab_lobe, tab_sim, tab_report, tab_notes = st.tabs(["🧊 3D Lobe + Slice Plane", "🔥 2D Process Simulation", "📊 Strength & Metallurgy", "ℹ️ Model notes"])
 
-ZONE_COLORS = ["#cfd8dc", "#9ccc65", "#42a5f5", "#f48fb1", "#ff6d00"]
+ZONE_COLORS = ["#cfd8dc", "#9ccc65", "#42a5f5", "#f48fb1", "#ff6d00"] if factory else ["#cfd8dc", "#66bb6a", "#ff6d00"]
+N_ZONE = len(ZONE_COLORS)
 ZONE_SCALE = []
 for _i, _c in enumerate(ZONE_COLORS):
-    ZONE_SCALE += [[_i / 5.0, _c], [(_i + 1) / 5.0, _c]]
+    ZONE_SCALE += [[_i / N_ZONE, _c], [(_i + 1) / N_ZONE, _c]]
 
-def zone_of(D, EX):
-    """0 too small, 1 general-spot, 2 important-spot, 3 large (no expulsion), 4 expulsion"""
-    return np.select([D > EX, D >= HI_D, D >= IMP_D, D >= GEN_D], [4, 3, 2, 1], 0)
-
-# ======================================================================================
-# TAB 1 : 3D LOBE WITH ADJUSTABLE PLANE  ->  LIVE 2D LOBE
-# ======================================================================================
-with tab_lobe:
+def zone_index(D, EX):
+    """Zone number of every nugget value. Factory: 0 below general, 1 general, 2 important, 3 large, 4 expulsion.
+    Generic: 0 too small, 1 acceptable, 2 expulsion."""
+    D = np.asarray(D, dtype=float); EX = EX + 0.0 * D
     if factory:
-        d_target = float(nugget(I_REC, C_REC, F_REC))
-        st.markdown("#### Recommended setting (factory equations)")
-        r1, r2, r3, r4, r5 = st.columns(5)
-        r1.metric("Weld force", f"{F_REC:.0f} kg")
-        r2.metric("Weld time", f"{C_REC:.1f} cycles")
-        r3.metric("Weld current", f"{I_REC_KA:.2f} kA", "+20 % zinc" if is_zinc else None, delta_color="off")
-        r4.metric("Target nugget", f"{d_target:.2f} mm")
-        r5.metric("General / Important", f"{GEN_D:.1f} / {IMP_D:.1f} mm")
+        return np.select([D > EX, D >= HI_D, D >= IMP_D, D >= GEN_D], [4, 3, 2, 1], 0)
+    return np.select([D > EX, D >= target_min], [2, 1], 0)
 
     c_ctrl, _ = st.columns([2, 1])
     with c_ctrl:
@@ -383,18 +385,26 @@ with tab_lobe:
         else:
             pos = st.slider("Plane position: Current (A)", I_MIN, I_MAX, int(active_current), step=I_STEP)
 
-    # --- 3D volumetric lobe: region where  target_min <= nugget <= expulsion  (dark, saturated colours on white)
-    ci = np.linspace(I_MIN, I_MAX, 36); ti = np.linspace(T_MIN, T_MAX, 28); fi = np.linspace(F_MIN, F_MAX, 28)
+    # --- 3D volumetric lobe: the whole acceptable volume (target_min <= nugget <= expulsion) is filled with colour
+    ci = np.linspace(I_MIN, I_MAX, 40); ti = np.linspace(T_MIN, T_MAX, 30); fi = np.linspace(F_MIN, F_MAX, 30)
     I3, T3, F3 = np.meshgrid(ci, ti, fi, indexing="ij")
-    D3 = nugget(I3, T3, F3)
+    D3 = nugget(I3, T3, F3); EX3 = expulsion(F3) + 0.0 * D3
+    inside = (D3 >= target_min) & (D3 <= EX3)
+    V3 = np.where(inside, D3, 0.0)
+    c_lo, c_hi = float(target_min), float(max(EX3.max(), target_min * 1.05))
+    if factory:
+        vol_scale, edges = [], [e for e in [GEN_D, IMP_D, HI_D, EXP_D] if e > target_min + 1e-9]
+        pts = [c_lo] + [e for e in edges if e < c_hi] + [c_hi]
+        for lo_, hi_ in zip(pts[:-1], pts[1:]):
+            col = ZONE_COLORS[int(zone_index((lo_ + hi_) / 2.0, EXP_D + 1.0))]
+            vol_scale += [[(lo_ - c_lo) / (c_hi - c_lo), col], [(hi_ - c_lo) / (c_hi - c_lo), col]]
+    else:
+        vol_scale = [[0, "#2e7d32"], [0.5, "#9ccc65"], [1, "#f9a825"]]
     NOCAP = dict(x=dict(show=False), y=dict(show=False), z=dict(show=False))
     fig3 = go.Figure()
-    fig3.add_trace(go.Isosurface(x=I3.flatten(), y=T3.flatten(), z=F3.flatten(), value=(D3 - target_min).flatten(),
-                                 isomin=0, isomax=0, surface_count=1, colorscale=[[0, "#0d47a1"], [1, "#0d47a1"]], opacity=0.55,
-                                 showscale=False, name="Minimum nugget (lower lobe limit)", showlegend=True, caps=NOCAP))
-    fig3.add_trace(go.Isosurface(x=I3.flatten(), y=T3.flatten(), z=F3.flatten(), value=(D3 - expulsion(F3)).flatten(),
-                                 isomin=0, isomax=0, surface_count=1, colorscale=[[0, "#bf360c"], [1, "#bf360c"]], opacity=0.55,
-                                 showscale=False, name="Expulsion (upper lobe limit)", showlegend=True, caps=NOCAP))
+    fig3.add_trace(go.Volume(x=I3.flatten(), y=T3.flatten(), z=F3.flatten(), value=V3.flatten(), isomin=c_lo, isomax=c_hi, cmin=c_lo, cmax=c_hi,
+                             opacity=0.22, surface_count=28, colorscale=vol_scale, caps=NOCAP, name="Acceptable weld lobe", showlegend=True,
+                             colorbar=dict(title="Nugget Ø (mm)", len=0.6)))
     # the adjustable plane
     if plane == "Force (kg)":
         gx, gy = np.meshgrid([I_MIN, I_MAX], [T_MIN, T_MAX]); gz = np.full_like(gx, pos, dtype=float)
@@ -402,30 +412,41 @@ with tab_lobe:
         gx, gz = np.meshgrid([I_MIN, I_MAX], [F_MIN, F_MAX]); gy = np.full_like(gx, pos, dtype=float)
     else:
         gy, gz = np.meshgrid([T_MIN, T_MAX], [F_MIN, F_MAX]); gx = np.full_like(gy, pos, dtype=float)
-    fig3.add_trace(go.Surface(x=gx, y=gy, z=gz, showscale=False, opacity=0.40, colorscale=[[0, "#ffa000"], [1, "#ffa000"]], name="Slice plane", showlegend=True))
+    fig3.add_trace(go.Surface(x=gx, y=gy, z=gz, showscale=False, opacity=0.28, colorscale=[[0, "#263238"], [1, "#263238"]], name="Slice plane", showlegend=True))
     fig3.add_trace(go.Scatter3d(x=[active_current], y=[active_time], z=[active_force], mode="markers",
                                 marker=dict(size=7, color="black", symbol="diamond"), name="Operating point"))
     AX = dict(backgroundcolor="#eceff1", gridcolor="#90a4ae", showbackground=True, zerolinecolor="#546e7a", linecolor="#37474f", tickfont=dict(color="#263238"))
     fig3.update_layout(scene=dict(xaxis=dict(title="Current (A)", range=[I_MIN, I_MAX], **AX), yaxis=dict(title="Time (cycles)", range=[T_MIN, T_MAX], **AX),
                                   zaxis=dict(title="Force (kg)", range=[F_MIN, F_MAX], **AX)),
                        margin=dict(l=0, r=0, b=0, t=30), height=620, template="plotly_white", paper_bgcolor="white",
-                       legend=dict(orientation="h", y=1.04), title="3D weld lobe (volume between the blue and red surfaces = acceptable nugget)")
+                       legend=dict(orientation="h", y=1.04), title="3D weld lobe (coloured volume = acceptable nugget, coloured by nugget size)")
 
-    # --- 2D weld lobe cut along the plane
+    # --- 2D weld lobe cut along the plane (fine grid -> smooth zone edges) + matching Excel-style table
+    NG = 260
     if plane == "Force (kg)":
-        X, Y = np.meshgrid(currents, times); D = nugget(X, Y, pos); EX = expulsion(D * 0 + pos)
-        xlab, ylab = "Current (A)", "Weld time (cycles)"; xs, ys = currents, times; op = (active_current, active_time)
+        xs, ys = np.linspace(I_MIN, I_MAX, NG), np.linspace(T_MIN, T_MAX, NG)
+        fD = lambda X, Y: nugget(X, Y, pos); fE = lambda X, Y: expulsion(0.0 * X + pos)
+        xlab, ylab = "Current (A)", "Weld time (cycles)"; op = (active_current, active_time)
         ttl = f"2D weld lobe at Force = {pos} kg"
+        tx = np.linspace(I_MIN, I_MAX, 15); ty = np.arange(T_MAX, T_MIN - 1, -1, dtype=float)
+        xfmt, yfmt = (lambda v: f"{v / 1000:.1f} kA"), (lambda v: f"{int(v)} cyc")
     elif plane == "Time (cycles)":
-        X, Y = np.meshgrid(currents, forces); D = nugget(X, pos, Y); EX = expulsion(Y)
-        xlab, ylab = "Current (A)", "Force (kg)"; xs, ys = currents, forces; op = (active_current, active_force)
+        xs, ys = np.linspace(I_MIN, I_MAX, NG), np.linspace(F_MIN, F_MAX, NG)
+        fD = lambda X, Y: nugget(X, pos, Y); fE = lambda X, Y: expulsion(Y)
+        xlab, ylab = "Current (A)", "Force (kg)"; op = (active_current, active_force)
         ttl = f"2D weld lobe at Time = {pos} cycles"
+        tx = np.linspace(I_MIN, I_MAX, 15); ty = np.unique(np.round(np.linspace(F_MIN, F_MAX, 16)))[::-1]
+        xfmt, yfmt = (lambda v: f"{v / 1000:.1f} kA"), (lambda v: f"{int(v)} kg")
     else:
-        X, Y = np.meshgrid(times, forces); D = nugget(pos, X, Y); EX = expulsion(Y)
-        xlab, ylab = "Weld time (cycles)", "Force (kg)"; xs, ys = times, forces; op = (active_time, active_force)
+        xs, ys = np.linspace(T_MIN, T_MAX, NG), np.linspace(F_MIN, F_MAX, NG)
+        fD = lambda X, Y: nugget(pos, X, Y); fE = lambda X, Y: expulsion(Y)
+        xlab, ylab = "Weld time (cycles)", "Force (kg)"; op = (active_time, active_force)
         ttl = f"2D weld lobe at Current = {pos} A"
+        tx = np.unique(np.round(np.linspace(T_MIN, T_MAX, 16))); ty = np.unique(np.round(np.linspace(F_MIN, F_MAX, 16)))[::-1]
+        xfmt, yfmt = (lambda v: f"{int(v)} cyc"), (lambda v: f"{int(v)} kg")
+    X, Y = np.meshgrid(xs, ys); D = fD(X, Y); EX = fE(X, Y) + 0.0 * D
     fig2 = go.Figure()
-    fig2.add_trace(go.Heatmap(x=xs, y=ys, z=zone_of(D, EX), zmin=0, zmax=4.999, showscale=False, hoverinfo="skip", colorscale=ZONE_SCALE))
+    fig2.add_trace(go.Heatmap(x=xs, y=ys, z=zone_index(D, EX), zmin=0, zmax=N_ZONE - 0.001, showscale=False, hoverinfo="skip", colorscale=ZONE_SCALE))
     fig2.add_trace(go.Contour(x=xs, y=ys, z=D, showscale=False, contours_coloring="none", contours=dict(showlabels=True, labelfont=dict(size=10, color="#263238")),
                               line=dict(color="rgba(38,50,56,0.55)", width=1), name="Nugget Ø (mm)", hovertemplate="Ø %{z:.2f} mm<extra></extra>"))
     fig2.add_trace(go.Contour(x=xs, y=ys, z=D, showscale=False, contours_coloring="none", contours=dict(start=target_min, end=target_min, size=1),
@@ -447,21 +468,24 @@ with tab_lobe:
                     "<span style='background:#42a5f5;padding:2px 8px'>Important spot</span> "
                     "<span style='background:#f48fb1;padding:2px 8px'>large nugget</span> "
                     "<span style='background:#ff6d00;padding:2px 8px;color:white'>expulsion</span>", unsafe_allow_html=True)
+    else:
+        st.markdown("<span style='background:#cfd8dc;padding:2px 8px'>too small</span> "
+                    "<span style='background:#66bb6a;padding:2px 8px'>acceptable</span> "
+                    "<span style='background:#ff6d00;padding:2px 8px;color:white'>expulsion</span>", unsafe_allow_html=True)
     d_op = float(nugget(active_current, active_time, active_force))
     in_window = target_min <= d_op <= float(expulsion(active_force))
     st.caption(f"Operating point nugget Ø {d_op:.2f} mm. " + ("✅ Inside the weld window." if in_window else "⚠️ Outside the weld window.") +
-               "  Rotate the 3D lobe with the mouse; the amber plane is the cut shown at right.")
+               "  Rotate the 3D lobe with the mouse; the dark plane is the cut shown at right.")
 
-    # ---- Excel-style lobe table (current x cycles) at the operating force
-    st.markdown(f"#### Lobe table — nugget Ø (mm) at force = {active_force} kg")
-    cur_cols = np.linspace(I_MIN, I_MAX, 15)
-    cyc_rows = list(range(T_MAX, T_MIN - 1, -1))
-    Dt = nugget(cur_cols[None, :], np.array(cyc_rows)[:, None], active_force)
-    df = pd.DataFrame(Dt, index=[f"{c} cyc" for c in cyc_rows], columns=[f"{c / 1000:.1f} kA" for c in cur_cols])
-    Zt = zone_of(Dt, float(expulsion(active_force)))
+    # ---- Excel-style table = the same cross-section as the 2D lobe
+    st.markdown(f"#### Lobe table — {ttl.replace('2D weld lobe at ', '')}  (nugget Ø in mm)")
+    TX, TY = np.meshgrid(tx, ty)
+    Dt = fD(TX, TY); Et = fE(TX, TY) + 0.0 * Dt
+    df = pd.DataFrame(Dt, index=[yfmt(v) for v in ty], columns=[xfmt(v) for v in tx])
+    Zt = zone_index(Dt, Et)
     def _paint(_):
-        return pd.DataFrame([[f"background-color:{ZONE_COLORS[int(z)]};color:{'white' if z == 4 else '#212121'}" for z in row] for row in Zt], index=df.index, columns=df.columns)
-    st.dataframe(df.style.apply(_paint, axis=None).format("{:.1f}"), use_container_width=True, height=min(740, 38 + 35 * len(cyc_rows)))
+        return pd.DataFrame([[f"background-color:{ZONE_COLORS[int(z)]};color:{'white' if int(z) == N_ZONE - 1 else '#212121'}" for z in row] for row in Zt], index=df.index, columns=df.columns)
+    st.dataframe(df.style.apply(_paint, axis=None).format("{:.1f}"), use_container_width=True, height=min(740, 38 + 35 * len(ty)))
 
     # ---- nugget growth with weld time
     cyc = np.linspace(0.2, max(12.0, T_MAX / 2.0), 60)
