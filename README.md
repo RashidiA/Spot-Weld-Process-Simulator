@@ -51,9 +51,10 @@ With `t_min` the thinnest sheet (mm), `t_total` the stack thickness (mm), `I` th
 |---|---|
 | Recommended force | `F_rec = (0.3428·t_min² + 1.327·t_min + 0.5865) · 1000 / 9.81` kg |
 | Recommended weld time | `c_rec = 10 · t_min` cycles |
-| Recommended current | `I_rec = f · √[ 9.7·3.14·(d²/4)·t_total / (0.24·(0.0001·c_rec·0.02)) ] / 1000` kA, `f = 1.2` if `t_min ≥ 1 mm` else `1.16`, `d` = general-spot nugget |
-| Nugget diameter | `d = √[ 4·1.2·I²·0.241·0.0001·(0.02·c) / ((F/F_rec)·9.7·t_total·3.14) ]` |
+| Recommended current | `I_rec = f · √[ 9.7·3.14·(d²/4)·t_total / (K_rec·(0.0001·c_rec·0.02)) ] / 1000` kA, `f = 1.2` if `t_min ≥ 1 mm` else `1.16`, `d` = general-spot nugget |
+| Nugget diameter | `d = √[ 4·1.2·I²·K·0.0001·(0.02·c) / ((F/F_rec)·9.7·t_total·3.14) ]` |
 
+* **Transformer type (first selection in the sidebar):** the factory equations differ between transformers. `K = 0.241` for an **AC transformer** and `K = 0.37` for an **MFDC transformer** in the nugget equation. In the recommended-current equation `K_rec = 0.24` (AC) and `0.37` (MFDC); the MFDC value there is inferred from the nugget equation and should be confirmed. The selection applies to every material grade.
 * **Zinc-coated sheet:** current increased by 20 % (applied as `I/1.2` in the nugget equation).
 * **Nugget limits** (inferred from the colour boundaries of the factory lobe table and editable in the sidebar): general spot 4.1·√t_min, important spot 5.0·√t_min, upper edge of the "important" band 6.0·√t_min, expulsion 9.0·√t_min.
 * **AHSS / UHSS / HPF:** scaled from the mild-steel basis with two assumed factors, editable under *Material correction*:
