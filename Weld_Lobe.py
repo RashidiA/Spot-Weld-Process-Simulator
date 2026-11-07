@@ -1,441 +1,510 @@
-# Asari-Rashidi Spot Welding Model (Advanced Metallurgical & Mechanical Suite)
+# Asari-Rashidi Spot Welding Simulator v2
+# Weld-lobe explorer (3D lobe + adjustable slice plane -> live 2D lobe) and
+# SORPAS-style 2D axisymmetric transient process simulation (temperature field, nugget growth, dynamic resistance).
 import streamlit as st
 import numpy as np
 import plotly.graph_objects as go
-import streamlit.components.v1 as components
 
-# --- CONFIGURATION ---
-st.set_page_config(page_title="Spot Welding Lobe Simulator", layout="wide")
-st.title("🔬 Real-Time Transient Nugget Growth & Metallurgical Simulator")
+st.set_page_config(page_title="Spot Welding Lobe & Process Simulator", layout="wide")
+st.title("🔬 Spot Welding Lobe & 2D Process Simulator")
+st.caption("3D weld lobe with an adjustable slice plane • 2D axisymmetric thermal simulation of nugget growth • learning tool (indicative results, not a replacement for validated FEA such as SORPAS)")
 
-# --- MATERIAL DATABASE WITH MECHANICAL & CHEMICAL PROPERTIES ---
+# ---------------- 2D thermal solver ----------------
+
+DX = 0.2e-3           # grid size (m)
+R_DOM = 10.0e-3       # simulated radius (m)
+EL_H = 6.0e-3         # electrode height simulated (m)
+EL_R = 8.0e-3         # electrode body radius (m)
+T_AMB = 25.0
+T_LIQ = 1500.0
+T_HAZ = 727.0
+
+_TT = np.arange(0, 2001, dtype=float)
+# mild-steel properties vs temperature
+_K_STEEL = np.interp(_TT, [0, 300, 600, 800, 1000, 1500, 2000], [52, 44, 34, 27, 28, 32, 34])
+_RHO_STEEL = np.interp(_TT, [0, 200, 500, 800, 1000, 1500, 2000], [0.16, 0.26, 0.58, 1.05, 1.15, 1.25, 1.30]) * 1e-6
+_C_STEEL = np.interp(_TT, [0, 500, 727, 800, 1500, 2000], [3.7e6, 4.6e6, 6.2e6, 5.2e6, 5.6e6, 5.6e6])
+_C_STEEL = _C_STEEL + np.where((_TT > 1450) & (_TT < 1520), 2.1e9 / 70.0, 0.0)  # latent heat of fusion
+_K_CU = np.full_like(_TT, 360.0)
+_C_CU = np.full_like(_TT, 3.45e6)
+_RHO_CU = np.interp(_TT, [0, 500, 1000], [0.017, 0.045, 0.08]) * 1e-6
+
+
+def simulate_weld(layers, zinc, d_tip, force_kg, current, weld_cyc, pulses, cool_cyc, hold_cyc,
+                  freq=50.0, heat_scale=1.0, contact_scale=1.0):
+    """Axisymmetric transient electro-thermal model of a resistance spot weld.
+    layers: tuple of (thickness_mm, resistivity_factor). Returns dict of results."""
+    n_r = int(round(R_DOM / DX))
+    n_el = int(round(EL_H / DX))
+    rows = []   # material id per row: 1 = copper, 2.. = sheets
+    resf = []
+    for _ in range(n_el):
+        rows.append(1); resf.append(1.0)
+    iface = []  # row index where an interface starts (between row-1 and row)
+    iface.append(('el', len(rows)))
+    for li, (t_mm, rf) in enumerate(layers):
+        n = max(2, int(round(t_mm * 1e-3 / DX)))
+        for _ in range(n):
+            rows.append(2 + li); resf.append(rf)
+        if li < len(layers) - 1:
+            iface.append(('fay', len(rows)))
+    iface.append(('el', len(rows)))
+    for _ in range(n_el):
+        rows.append(1); resf.append(1.0)
+    n_z = len(rows)
+    mat = np.array(rows)[:, None] * np.ones((1, n_r), dtype=int)
+    rf2 = np.array(resf)[:, None] * np.ones((1, n_r))
+    r_c = (np.arange(n_r) + 0.5) * DX
+    r_f = (np.arange(n_r + 1)) * DX
+
+    a = d_tip * 1e-3 / 2.0
+    top_sheet = n_el
+    bot_sheet = n_z - n_el          # first electrode row below
+    # electrode cone shape: radius grows 30 deg from face until body radius
+    tan30 = np.tan(np.radians(30.0))
+    active = np.ones((n_z, n_r), dtype=bool)
+    el_rad = np.zeros(n_z)
+    for z in range(n_z):
+        if z < top_sheet:
+            h = (top_sheet - 1 - z + 0.5) * DX
+            rad = min(EL_R, a + h * tan30 * 1.6)
+            active[z] = r_c <= rad
+            el_rad[z] = rad
+        elif z >= bot_sheet:
+            h = (z - bot_sheet + 0.5) * DX
+            rad = min(EL_R, a + h * tan30 * 1.6)
+            active[z] = r_c <= rad
+            el_rad[z] = rad
+        else:
+            el_rad[z] = R_DOM
+    isCu = (mat == 1)
+    kT_st, cT_st, rT_st = _K_STEEL, _C_STEEL, _RHO_STEEL
+
+    T = np.full((n_z, n_r), T_AMB)
+    force_N = force_kg * 9.81
+    dt = 0.9 * DX * DX / (4.0 * 360.0 / 3.45e6)
+    dt = min(dt, 1.0 / freq / 160.0)
+
+    cycle = 1.0 / freq
+    sched = []
+    for p in range(int(pulses)):
+        sched.append((current, weld_cyc * cycle))
+        if p < pulses - 1 and cool_cyc > 0:
+            sched.append((0.0, cool_cyc * cycle))
+    if hold_cyc > 0:
+        sched.append((0.0, hold_cyc * cycle))
+    total_t = sum(d for _, d in sched)
+
+    fay_scale = (0.7 if zinc else 1.0) * contact_scale
+    el_scale = contact_scale
+    rc_fay0 = 4.0e-9 * fay_scale
+    rc_el0 = 1.6e-9 * el_scale
+    F_ref = 2500.0
+    a_cur = a * 1.05
+    snap_every = max(1, int(round(cycle / dt)))
+    rec_every = max(1, int(round(1e-3 / dt)))
+
+    cond_mask = (active & (mat > 0)).astype(float)
+    # precompute radial geometry factors
+    rf_ = r_f[1:-1]
+    vol_fac = (r_c * DX)
+    snaps, snap_t = [], []
+    rec = {'t': [], 'dia': [], 'pen': [], 'tmax': [], 'rdyn': [], 'I': []}
+    t = 0.0
+    step = 0
+    zeros0 = np.zeros_like(T)
+    J2 = None
+    Ji2 = None
+    for I, dur in sched:
+        n_steps = max(1, int(round(dur / dt)))
+        for _ in range(n_steps):
+            idx = np.clip(T, 0, 2000).astype(np.int32)
+            k = np.where(isCu, _K_CU[idx], kT_st[idx]) * active
+            C = np.where(isCu, _C_CU[idx], cT_st[idx])
+            # harmonic face conductivities
+            kz = 2 * k[1:] * k[:-1] / (k[1:] + k[:-1] + 1e-12)
+            kr = 2 * k[:, 1:] * k[:, :-1] / (k[:, 1:] + k[:, :-1] + 1e-12)
+            dTz = T[1:] - T[:-1]
+            Fz = kz * dTz / DX
+            div = np.zeros_like(T)
+            div[:-1] += Fz / DX
+            div[1:] -= Fz / DX
+            Fr = kr * (T[:, 1:] - T[:, :-1]) / DX * rf_
+            divr = np.zeros_like(T)
+            divr[:, :-1] += Fr
+            divr[:, 1:] -= Fr
+            div += divr / (vol_fac)
+            q = None
+            if I > 0:
+                # current-carrying radius grows with the molten nugget
+                if (step % 40) == 0 or J2 is None:
+                    sh = T[top_sheet:bot_sheet] >= T_LIQ
+                    rn = (sh.any(axis=0).nonzero()[0].max() + 1) * DX if sh.any() else 0.0
+                    a_new = max(a * 1.05, rn * 0.95)
+                    if J2 is None or abs(a_new - a_cur) > 1e-9:
+                        a_cur = a_new
+                        J2, Ji2 = current_density_maps(a_cur, el_rad, top_sheet, bot_sheet, n_z, r_c)
+                rho = np.where(isCu, _RHO_CU[idx], _RHO_STEEL[idx] * rf2)
+                q = rho * J2 * (I * I)
+                for (typ, zi), Jz in zip(iface, Ji2):
+                    Ti = 0.5 * (T[zi] + T[zi - 1])
+                    rc0 = rc_fay0 if typ == 'fay' else rc_el0
+                    Rc = rc0 * np.sqrt(F_ref / max(force_N, 1.0)) * np.exp(-(Ti / 650.0) ** 2)
+                    qs = Rc * Jz * (I * I) / DX / 2.0
+                    q[zi] += qs
+                    q[zi - 1] += qs
+                q *= heat_scale
+            else:
+                q = zeros0
+            Tn = T + dt * (div + q) / C
+            Tn[0, :] = T_AMB
+            Tn[-1, :] = T_AMB
+            Tn = np.where(active, Tn, T)
+            T = Tn
+            t += dt
+            step += 1
+            if step % rec_every == 0:
+                sh = T[top_sheet:bot_sheet] >= T_LIQ
+                if sh.any():
+                    cols = sh.any(axis=0).nonzero()[0]
+                    dia = 2 * (cols.max() + 1) * DX * 1e3
+                    pen = sh[:, 0].sum() * DX / ((bot_sheet - top_sheet) * DX) * 100.0
+                else:
+                    dia, pen = 0.0, 0.0
+                P = float((q * vol_fac * 2 * np.pi * DX).sum()) / max(heat_scale, 1e-9) if I > 0 else 0.0
+                rec['t'].append(t); rec['dia'].append(dia); rec['pen'].append(pen)
+                rec['tmax'].append(float(T[top_sheet:bot_sheet].max()))
+                rec['rdyn'].append(P / (I * I) * 1e6 if I > 0 else 0.0)
+                rec['I'].append(I)
+            if step % snap_every == 0:
+                snaps.append(T.astype(np.float32).copy()); snap_t.append(t)
+    snaps.append(T.astype(np.float32).copy()); snap_t.append(t)
+    for kk in rec: rec[kk] = np.array(rec[kk])
+    sheet_haz = (T[top_sheet:bot_sheet] >= T_HAZ)
+    haz_r = (sheet_haz.any(axis=0).nonzero()[0].max() + 1) * DX * 1e3 if sheet_haz.any() else 0.0
+    return dict(rec=rec, snaps=np.array(snaps), snap_t=np.array(snap_t), n_el=n_el, top=top_sheet,
+                bot=bot_sheet, n_z=n_z, n_r=n_r, active=active, haz_r=haz_r,
+                iface=[z for _, z in iface], final_dia=float(rec['dia'].max() if len(rec['dia']) else 0),
+                max_pen=float(rec['pen'].max() if len(rec['pen']) else 0), peak=float(rec['tmax'].max()))
+
+
+def current_density_maps(a_cur, el_rad, top, bot, n_z, r_c):
+    """Squared current density (for 1 A total) per cell, and per sheet-interface row."""
+    n_r = len(r_c)
+    J2 = np.zeros((n_z, n_r))
+    shape_s = np.exp(-(np.maximum(r_c - a_cur, 0.0) / (0.12 * a_cur)) ** 2)
+    for z in range(n_z):
+        if z < top or z >= bot:
+            ar = el_rad[z]
+            sh = np.exp(-(np.maximum(r_c - ar, 0.0) / (0.12 * ar)) ** 2) * (r_c <= ar * 1.6)
+        else:
+            sh = shape_s
+        norm = (sh * 2 * np.pi * r_c * DX).sum()
+        J2[z] = (sh / norm) ** 2
+    Jn2 = (shape_s / (shape_s * 2 * np.pi * r_c * DX).sum()) ** 2
+    return J2, [Jn2] * 8
+
+# ======================================================================================
+# MATERIAL DATABASE (unchanged)
+# ======================================================================================
 materials_db = {
     "Mild Steel (JSC270)": {"res_factor": 1.0, "k_mod": 1.0, "ce": 0.08, "uts": 270},
     "High Strength (JSC440)": {"res_factor": 1.15, "k_mod": 1.05, "ce": 0.14, "uts": 440},
     "DP600 (Dual Phase)": {"res_factor": 1.35, "k_mod": 1.12, "ce": 0.18, "uts": 600},
     "DP980 (Ultra High Strength)": {"res_factor": 1.50, "k_mod": 1.20, "ce": 0.24, "uts": 980},
     "Boron Steel (Usibor 1500)": {"res_factor": 1.65, "k_mod": 1.25, "ce": 0.35, "uts": 1500},
-    "Trip Steel (TRIP780)": {"res_factor": 1.40, "k_mod": 1.15, "ce": 0.22, "uts": 780}
+    "Trip Steel (TRIP780)": {"res_factor": 1.40, "k_mod": 1.15, "ce": 0.22, "uts": 780},
 }
 
-# --- USER INPUT PANEL ---
+# ======================================================================================
+# SIDEBAR INPUTS
+# ======================================================================================
 with st.sidebar:
-    st.header("🌐 Simulation Mode Selection")
-    graph_mode = st.radio(
-        "Select Visualization Type",
-        options=["Complete 3D Volumetric Lobe", "2D Plane Slice Cross-Section"]
-    )
-    
-    if graph_mode == "2D Plane Slice Cross-Section":
-        slice_plane = st.selectbox(
-            "Target Orientation Plane",
-            options=["X-Y Plane (Current vs. Time at Fixed Force)", 
-                     "X-Z Plane (Current vs. Force at Fixed Time)"]
-        )
-        if "X-Y Plane" in slice_plane:
-            slice_force = st.slider("Slice Location: Fixed Force (kg)", 100, 450, 250, step=10)
-            st.subheader("💡 Dynamic Operating Point")
-            active_current = st.slider("Operating Current (A)", 5000, 13000, 9500, step=100)
-            active_time = st.slider("Max Weld Time (Cycles)", 3, 24, 16, step=1)
-            active_force = slice_force
-        else:
-            slice_time = st.slider("Slice Location: Fixed Time (Cycles)", 3, 24, 12, step=1)
-            st.subheader("💡 Dynamic Operating Point")
-            active_current = st.slider("Operating Current (A)", 5000, 13000, 9500, step=100)
-            active_force = st.slider("Operating Force (kg)", 100, 450, 250, step=10)
-            active_time = slice_time
-
-    st.divider()
-    st.header("1. Sheet Geometry Layers")
-    
-    # Ply 1 (Top)
+    st.header("1. Sheet stack")
     mat1 = st.selectbox("Ply 1 Material (Top)", list(materials_db.keys()))
-    t1 = st.slider("Thickness 1 (mm)", 0.5, 3.0, 1.0)
-    
-    # Ply 2 (Middle)
+    t1 = st.slider("Thickness 1 (mm)", 0.5, 3.0, 1.0, step=0.1)
     mat2 = st.selectbox("Ply 2 Material (Middle)", list(materials_db.keys()), index=2)
-    t2 = st.slider("Thickness 2 (mm)", 0.5, 3.0, 1.2)
-
-    # Ply 3 (Optional Bottom Layer)
-    ply3_options = ["None (Revert to 2-Ply)"] + list(materials_db.keys())
-    mat3_selection = st.selectbox("Ply 3 Material (Bottom)", ply3_options, index=0)
-    
+    t2 = st.slider("Thickness 2 (mm)", 0.5, 3.0, 1.2, step=0.1)
+    mat3_selection = st.selectbox("Ply 3 Material (Bottom)", ["None (Revert to 2-Ply)"] + list(materials_db.keys()), index=0)
     use_ply3 = mat3_selection != "None (Revert to 2-Ply)"
-    if use_ply3:
-        t3 = st.slider("Thickness 3 (mm)", 0.5, 3.0, 0.8)
-    else:
-        t3 = 0.0
+    t3 = st.slider("Thickness 3 (mm)", 0.5, 3.0, 0.8, step=0.1) if use_ply3 else 0.0
 
-    st.header("2. Electrodes & Scalers")
+    st.header("2. Electrodes")
     is_zinc = st.checkbox("Zinc Coated (GA/GI)?")
-    d_tip = st.slider("Tip Diameter (mm)", 4.0, 10.0, 6.0)
-    k_base = st.slider("Base k-factor", 0.10, 0.60, 0.35)
+    d_tip = st.slider("Tip Diameter (mm)", 4.0, 10.0, 6.0, step=0.5)
+    k_base = st.slider("Base k-factor (lobe model)", 0.10, 0.60, 0.35)
 
-# --- MATHEMATICAL COMPILATION ENGINE ---
-m1_p = materials_db[mat1]
-m2_p = materials_db[mat2]
+    st.header("3. Operating point")
+    active_current = st.slider("Weld current (A)", 5000, 13000, 9500, step=100)
+    active_time = st.slider("Weld time (cycles)", 3, 24, 16, step=1)
+    active_force = st.slider("Electrode force (kg)", 100, 450, 250, step=10)
 
-if use_ply3:
-    m3_p = materials_db[mat3_selection]
-    total_t = t1 + t2 + t3
-    t_min = min(t1, t2, t3)
-    
-    k_mod_weighted = (t1 * m1_p["k_mod"] + t2 * m2_p["k_mod"] + t3 * m3_p["k_mod"]) / total_t
-    res_weighted = (t1 * m1_p["res_factor"] + t2 * m2_p["res_factor"] + t3 * m3_p["res_factor"]) / total_t
-    uts_weighted = (t1 * m1_p["uts"] + t2 * m2_p["uts"] + t3 * m3_p["uts"]) / total_t
-    ce_weighted = (t1 * m1_p["ce"] + t2 * m2_p["ce"] + t3 * m3_p["ce"]) / total_t
-else:
-    total_t = t1 + t2
-    t_min = min(t1, t2)
-    k_mod_weighted = (t1 * m1_p["k_mod"] + t2 * m2_p["k_mod"]) / total_t
-    res_weighted = (t1 * m1_p["res_factor"] + t2 * m2_p["res_factor"]) / total_t
-    uts_weighted = (t1 * m1_p["uts"] + t2 * m2_p["uts"]) / total_t
-    ce_weighted = (t1 * m1_p["ce"] + t2 * m2_p["ce"]) / total_t
+    st.header("4. Schedule (2D simulation)")
+    freq = st.radio("Mains frequency", [50, 60], horizontal=True)
+    n_pulses = st.slider("Number of pulses", 1, 3, 1)
+    cool_cyc = st.slider("Cool time between pulses (cycles)", 0, 10, 4) if n_pulses > 1 else 0
+    hold_cyc = st.slider("Hold time after weld (cycles)", 0, 10, 4)
+    with st.expander("Advanced thermal model"):
+        heat_scale = st.slider("Heat-input factor", 0.3, 1.5, 0.75, step=0.05, help="Scales all Joule heating in the 2D model.")
+        contact_scale = st.slider("Contact resistance factor", 0.2, 3.0, 1.0, step=0.1)
+        calibrate = st.checkbox("Calibrate 2D model to the lobe formula at the operating point", value=False,
+                                help="Adjusts the heat-input factor automatically so the 2D nugget equals the lobe-model nugget at this operating point.")
 
-k_approx = k_base * k_mod_weighted * res_weighted
-if is_zinc: 
-    k_approx *= 0.82
+# ======================================================================================
+# LOBE MODEL (same formulas as before)
+# ======================================================================================
+layers_p = [materials_db[mat1], materials_db[mat2]] + ([materials_db[mat3_selection]] if use_ply3 else [])
+layers_t = [t1, t2] + ([t3] if use_ply3 else [])
+total_t = sum(layers_t)
+t_min = min(layers_t)
+k_mod_weighted = sum(t * p["k_mod"] for t, p in zip(layers_t, layers_p)) / total_t
+res_weighted = sum(t * p["res_factor"] for t, p in zip(layers_t, layers_p)) / total_t
+uts_weighted = sum(t * p["uts"] for t, p in zip(layers_t, layers_p)) / total_t
+ce_weighted = sum(t * p["ce"] for t, p in zip(layers_t, layers_p)) / total_t
 
-tip_eff = (6.0 / d_tip)**2
-target_min = 4 * np.sqrt(t_min)
+k_approx = k_base * k_mod_weighted * res_weighted * (0.82 if is_zinc else 1.0)
+tip_eff = (6.0 / d_tip) ** 2
+target_min = 4.0 * np.sqrt(t_min)
 
-# --- GRID CONTROLLER AXES ---
-currents = np.linspace(5000, 13000, 50)  
-times = np.linspace(3, 24, 40)
-forces = np.linspace(100, 450, 40)
+def nugget(I, T, F):
+    return k_approx * ((I * tip_eff) / 10000.0) ** 2 * (T / 10.0) * (300.0 / F) ** 0.25 * 5.5
 
-# --- 3D ISOSURFACE LOOPS ---
-if graph_mode == "Complete 3D Volumetric Lobe":
-    I, T, F = np.meshgrid(currents, times, forces)
-    nugget_growth = k_approx * ((I * tip_eff)/10000)**2 * (T/10) * (300/F)**0.25 * 5.5
-    
-    fig = go.Figure(data=go.Isosurface(
-        x=I.flatten(), y=T.flatten(), z=F.flatten(), value=nugget_growth.flatten(),
-        isomin=target_min, isomax=target_min*2.5, surface_count=4, colorscale='Plasma', opacity=0.4,
-        colorbar_title="Dia (mm)"
-    ))
-    fig.update_layout(
-        scene=dict(xaxis_title='Current (A)', yaxis_title='Time (Cycles)', zaxis_title='Force (kg)'),
-        margin=dict(l=0, r=0, b=0, t=40), height=700, template="plotly_dark"
-    )
-    st.plotly_chart(fig, use_container_width=True)
+def expulsion(F):
+    return (5.5 * np.sqrt(t_min)) * (F / 300.0) ** 0.1 * (d_tip / 6.0) ** 0.2
 
-# --- 2D CROSS-SECTION PLANE INTERACTIVE VIEW ---
-else:
-    if "X-Y Plane" in slice_plane:
-        I_2d, T_2d = np.meshgrid(currents, times)
-        nugget_growth_2d = k_approx * ((I_2d * tip_eff)/10000)**2 * (T_2d/10) * (300/slice_force)**0.25 * 5.5
-        exp_limit_2d = (5.5 * np.sqrt(t_min)) * (slice_force / 300)**0.1 * (d_tip / 6.0)**0.2
+I_MIN, I_MAX, T_MIN, T_MAX, F_MIN, F_MAX = 5000, 13000, 3, 24, 100, 450
+currents = np.linspace(I_MIN, I_MAX, 50)
+times = np.linspace(T_MIN, T_MAX, 40)
+forces = np.linspace(F_MIN, F_MAX, 40)
 
-        fig = go.Figure()
-        fig.add_trace(go.Contour(x=currents, y=times, z=nugget_growth_2d, colorscale='Plasma', colorbar=dict(title="Dia (mm)")))
-        fig.add_trace(go.Contour(x=currents, y=times, z=nugget_growth_2d, showscale=False, contours_coloring='none',
-                                 contours=dict(start=target_min, end=target_min), line=dict(color='cyan', width=4), name='Min Target'))
-        fig.add_trace(go.Contour(x=currents, y=times, z=nugget_growth_2d, showscale=False, contours_coloring='none',
-                                 contours=dict(start=exp_limit_2d, end=exp_limit_2d), line=dict(color='red', width=4, dash='dash'), name='Expulsion Limit'))
-        fig.add_trace(go.Scatter(x=[active_current], y=[active_time], mode='markers', marker=dict(color='white', size=12, symbol='cross'), name='Operating Point'))
-        fig.update_layout(xaxis_title="Current (A)", yaxis_title="Weld Time (Cycles)", template="plotly_dark", height=460, margin=dict(l=40, r=40, b=40, t=40), legend=dict(yanchor="top", y=0.99, xanchor="left", x=0.01))
-    
+tab_lobe, tab_sim, tab_report, tab_notes = st.tabs(["🧊 3D Lobe + Slice Plane", "🔥 2D Process Simulation", "📊 Strength & Metallurgy", "ℹ️ Model notes"])
+
+# ======================================================================================
+# TAB 1 : 3D LOBE WITH ADJUSTABLE PLANE  ->  LIVE 2D LOBE
+# ======================================================================================
+with tab_lobe:
+    c_ctrl, _ = st.columns([2, 1])
+    with c_ctrl:
+        plane = st.radio("Slice plane (fixed variable)", ["Force (kg)", "Time (cycles)", "Current (A)"], horizontal=True,
+                         help="The plane is drawn inside the 3D lobe. The 2D weld lobe on the right is exactly the cut along this plane.")
+        if plane == "Force (kg)":
+            pos = st.slider("Plane position: Force (kg)", F_MIN, F_MAX, int(active_force), step=5)
+        elif plane == "Time (cycles)":
+            pos = st.slider("Plane position: Time (cycles)", T_MIN, T_MAX, int(active_time), step=1)
+        else:
+            pos = st.slider("Plane position: Current (A)", I_MIN, I_MAX, int(active_current), step=100)
+
+    # --- 3D volumetric lobe: region where  target_min <= nugget <= expulsion
+    ci = np.linspace(I_MIN, I_MAX, 36); ti = np.linspace(T_MIN, T_MAX, 28); fi = np.linspace(F_MIN, F_MAX, 28)
+    I3, T3, F3 = np.meshgrid(ci, ti, fi, indexing="ij")
+    D3 = nugget(I3, T3, F3)
+    fig3 = go.Figure()
+    fig3.add_trace(go.Isosurface(x=I3.flatten(), y=T3.flatten(), z=F3.flatten(), value=(D3 - target_min).flatten(),
+                                 isomin=0, isomax=0, surface_count=1, colorscale=[[0, "#00e5ff"], [1, "#00e5ff"]], opacity=0.35,
+                                 showscale=False, name="Min target (lower lobe limit)", showlegend=True,
+                                 caps=dict(x=dict(show=False), y=dict(show=False), z=dict(show=False))))
+    fig3.add_trace(go.Isosurface(x=I3.flatten(), y=T3.flatten(), z=F3.flatten(), value=(D3 - expulsion(F3)).flatten(),
+                                 isomin=0, isomax=0, surface_count=1, colorscale=[[0, "#ff3d3d"], [1, "#ff3d3d"]], opacity=0.35,
+                                 showscale=False, name="Expulsion (upper lobe limit)", showlegend=True,
+                                 caps=dict(x=dict(show=False), y=dict(show=False), z=dict(show=False))))
+    # the adjustable plane
+    if plane == "Force (kg)":
+        gx, gy = np.meshgrid([I_MIN, I_MAX], [T_MIN, T_MAX]); gz = np.full_like(gx, pos, dtype=float)
+    elif plane == "Time (cycles)":
+        gx, gz = np.meshgrid([I_MIN, I_MAX], [F_MIN, F_MAX]); gy = np.full_like(gx, pos, dtype=float)
     else:
-        I_2d, F_2d = np.meshgrid(currents, forces)
-        nugget_growth_2d = k_approx * ((I_2d * tip_eff)/10000)**2 * (slice_time/10) * (300/F_2d)**0.25 * 5.5
-        exp_limit_2d = (5.5 * np.sqrt(t_min)) * (F_2d / 300)**0.1 * (d_tip / 6.0)**0.2
+        gy, gz = np.meshgrid([T_MIN, T_MAX], [F_MIN, F_MAX]); gx = np.full_like(gy, pos, dtype=float)
+    fig3.add_trace(go.Surface(x=gx, y=gy, z=gz, showscale=False, opacity=0.45, colorscale=[[0, "#ffd54f"], [1, "#ffd54f"]], name="Slice plane", showlegend=True))
+    fig3.add_trace(go.Scatter3d(x=[active_current], y=[active_time], z=[active_force], mode="markers",
+                                marker=dict(size=6, color="white", symbol="diamond"), name="Operating point"))
+    fig3.update_layout(scene=dict(xaxis_title="Current (A)", yaxis_title="Time (cycles)", zaxis_title="Force (kg)",
+                                  xaxis=dict(range=[I_MIN, I_MAX]), yaxis=dict(range=[T_MIN, T_MAX]), zaxis=dict(range=[F_MIN, F_MAX])),
+                       margin=dict(l=0, r=0, b=0, t=30), height=620, template="plotly_dark",
+                       legend=dict(orientation="h", y=1.02), title="3D weld lobe (between the cyan and red surfaces = acceptable nugget)")
 
-        fig = go.Figure()
-        fig.add_trace(go.Contour(x=currents, y=forces, z=nugget_growth_2d, colorscale='Plasma', colorbar=dict(title="Dia (mm)")))
-        fig.add_trace(go.Contour(x=currents, y=forces, z=nugget_growth_2d, showscale=False, contours_coloring='none',
-                                 contours=dict(start=target_min, end=target_min), line=dict(color='cyan', width=4), name='Min Target'))
-        fig.add_trace(go.Contour(x=currents, y=forces, z=(nugget_growth_2d - exp_limit_2d), showscale=False, contours_coloring='none',
-                                 contours=dict(start=0, end=0), line=dict(color='red', width=4, dash='dash'), name='Expulsion Limit'))
-        fig.add_trace(go.Scatter(x=[active_current], y=[active_force], mode='markers', marker=dict(color='white', size=12, symbol='cross'), name='Operating Point'))
-        fig.update_layout(xaxis_title="Current (A)", yaxis_title="Force (kg)", template="plotly_dark", height=460, margin=dict(l=40, r=40, b=40, t=40), legend=dict(yanchor="top", y=0.99, xanchor="left", x=0.01))
+    # --- 2D weld lobe cut along the plane
+    if plane == "Force (kg)":
+        X, Y = np.meshgrid(currents, times); D = nugget(X, Y, pos); EX = np.full_like(D, expulsion(pos))
+        xlab, ylab = "Current (A)", "Weld time (cycles)"; xs, ys = currents, times; op = (active_current, active_time)
+        ttl = f"2D weld lobe at Force = {pos} kg"
+    elif plane == "Time (cycles)":
+        X, Y = np.meshgrid(currents, forces); D = nugget(X, pos, Y); EX = expulsion(Y)
+        xlab, ylab = "Current (A)", "Force (kg)"; xs, ys = currents, forces; op = (active_current, active_force)
+        ttl = f"2D weld lobe at Time = {pos} cycles"
+    else:
+        X, Y = np.meshgrid(times, forces); D = nugget(pos, X, Y); EX = expulsion(Y)
+        xlab, ylab = "Weld time (cycles)", "Force (kg)"; xs, ys = times, forces; op = (active_time, active_force)
+        ttl = f"2D weld lobe at Current = {pos} A"
+    zone = np.where(D < target_min, 0, np.where(D <= EX, 1, 2))
+    fig2 = go.Figure()
+    fig2.add_trace(go.Heatmap(x=xs, y=ys, z=zone, zmin=0, zmax=2, showscale=False, opacity=0.55, hoverinfo="skip",
+                              colorscale=[[0, "#455a64"], [0.33, "#455a64"], [0.34, "#2e7d32"], [0.66, "#2e7d32"], [0.67, "#c62828"], [1, "#c62828"]]))
+    fig2.add_trace(go.Contour(x=xs, y=ys, z=D, colorscale="Plasma", opacity=0.55, contours=dict(showlabels=True, labelfont=dict(size=10, color="white")),
+                              colorbar=dict(title="Dia (mm)"), name="Nugget"))
+    fig2.add_trace(go.Contour(x=xs, y=ys, z=D, showscale=False, contours_coloring="none", contours=dict(start=target_min, end=target_min, size=1),
+                              line=dict(color="cyan", width=4), name="Min target", showlegend=True))
+    fig2.add_trace(go.Contour(x=xs, y=ys, z=D - EX, showscale=False, contours_coloring="none", contours=dict(start=0, end=0, size=1),
+                              line=dict(color="red", width=4, dash="dash"), name="Expulsion limit", showlegend=True))
+    fig2.add_trace(go.Scatter(x=[op[0]], y=[op[1]], mode="markers", marker=dict(color="white", size=13, symbol="cross", line=dict(color="black", width=1)), name="Operating point"))
+    fig2.update_layout(title=ttl + "  (green = weld window)", xaxis_title=xlab, yaxis_title=ylab, template="plotly_dark", height=620,
+                       margin=dict(l=40, r=20, b=40, t=50), legend=dict(orientation="h", y=-0.15))
 
-    # --- CANVAS HTML GENERATION WITH ASYMMETRIC BIAS ENGINE ---
-    ply3_legend_html = "<div style='display: flex; align-items: center; gap: 4px;'><span style='width: 10px; height: 7px; background-color: rgba(220,160,220,0.25); border:1px solid rgba(220,160,220,0.7);'></span> Ply 3</div>" if use_ply3 else ""
-    
-    canvas_html = """
-    <div style="background-color: #111111; padding: 12px 15px; border-radius: 8px; font-family: sans-serif; color: white; display: flex; flex-direction: column; height: 460px; box-sizing: border-box; justify-content: space-between;">
-        <h4 style="margin: 0; color: #E0E0E0; font-size: 14px; font-weight: 600;">Transient Nugget Thermal Development Map (Multi-Ply Mode)</h4>
-        
-        <div style="display: flex; gap: 15px; align-items: center; justify-content: center; flex-grow: 1; margin: 5px 0;">
-            <canvas id="weldCanvas" width="440" height="270" style="background-color: #1e1e1e; border: 1px solid #333; border-radius: 4px;"></canvas>
-            
-            <div style="display: flex; flex-direction: column; align-items: center; justify-content: center; width: 40px;">
-                <span style="font-size: 10px; font-weight: bold; color: #ffffff; margin-bottom: 3px;">1530°C</span>
-                <div style="width: 14px; height: 210px; background: linear-gradient(to top, #4b0082, #9400d3, #ffcc00, #ff4500, #ffffff); border: 1px solid #555; border-radius: 2px;"></div>
-                <span style="font-size: 10px; font-weight: bold; color: #888888; margin-top: 3px;">25°C</span>
-                <div style="font-size: 8px; color: #aaaaaa; letter-spacing: 0.5px; writing-mode: vertical-rl; text-orientation: mixed; margin-top: 6px; text-transform: uppercase;">Temperature</div>
-            </div>
-        </div>
-        
-        <div>
-            <div style="display: flex; flex-wrap: wrap; gap: 10px; justify-content: center; font-size: 10px; color: #BBBBBB; margin-bottom: 8px;">
-                <div style="display: flex; align-items: center; gap: 4px;"><span style="width: 10px; height: 7px; background-color: rgba(100,149,237,0.25); border:1px solid rgba(100,149,237,0.7);"></span> Ply 1</div>
-                <div style="display: flex; align-items: center; gap: 4px;"><span style="width: 10px; height: 7px; background-color: rgba(144,238,144,0.25); border:1px solid rgba(144,238,144,0.7);"></span> Ply 2</div>
-                """ + ply3_legend_html + """
-                <div style="display: flex; align-items: center; gap: 4px;"><span style="width: 10px; height: 7px; background: linear-gradient(to right, #ff4500, #b4b4b4);"></span> Tip Thermal</div>
-                <div style="display: flex; align-items: center; gap: 4px;"><span style="width: 10px; height: 7px; background-color: rgba(255,140,0,0.22);"></span> HAZ</div>
-                <div style="display: flex; align-items: center; gap: 4px;"><span style="width: 10px; height: 7px; background: radial-gradient(#fff, #9400d3); border:1px solid #ffff00;"></span> Melt Pool</div>
-            </div>
+    col3d, col2d = st.columns([1.15, 1])
+    with col3d:
+        st.plotly_chart(fig3, use_container_width=True)
+    with col2d:
+        st.plotly_chart(fig2, use_container_width=True)
+    in_window = target_min <= nugget(active_current, active_time, active_force) <= expulsion(active_force)
+    st.caption("Tip: rotate the 3D lobe with the mouse; the yellow plane is the cut shown at right. Move the plane with the slider above. "
+               + ("✅ The operating point is inside the weld window." if in_window else "⚠️ The operating point is outside the weld window."))
 
-            <div style="display: flex; gap: 12px; align-items: center; justify-content: center; height: 32px;">
-                <button onclick="startSimulationPlayback()" style="background-color: #007bff; color: white; border: none; padding: 6px 14px; border-radius: 4px; cursor: pointer; font-weight: bold; font-size: 12px;">▶ Play Growth</button>
-                <button onclick="stopSimulationPlayback()" style="background-color: #6c757d; color: white; border: none; padding: 6px 14px; border-radius: 4px; cursor: pointer; font-weight: bold; font-size: 12px;">⏸ Pause</button>
-                <span id="cycleLabel" style="font-size: 13px; color: #00ffff; font-family: monospace; font-weight: bold; min-width: 150px;">Ready</span>
-            </div>
-        </div>
-    </div>
+# ======================================================================================
+# TAB 2 : 2D AXISYMMETRIC PROCESS SIMULATION
+# ======================================================================================
+@st.cache_data(show_spinner=False, max_entries=24)
+def run_sim(layers, zinc, d_tip, force, current, wcyc, pulses, ccyc, hcyc, freq, hs, cs):
+    return simulate_weld(layers, zinc, d_tip, force, current, wcyc, pulses, ccyc, hcyc, freq, hs, cs)
 
-    <script>
-        const t1 = """ + str(t1) + """;
-        const t2 = """ + str(t2) + """;
-        const t3 = """ + str(t3) + """;
-        const usePly3 = """ + str(use_ply3).lower() + """;
-        const dTip = """ + str(d_tip) + """;
-        const maxTime = """ + str(active_time) + """;
-        const currentI = """ + str(active_current) + """;
-        const forceF = """ + str(active_force) + """;
-        const kApprox = """ + str(k_approx) + """;
-        const targetMin = """ + str(target_min) + """;
+sim_layers = tuple((t, p["res_factor"]) for t, p in zip(layers_t, layers_p))
+base_args = (sim_layers, bool(is_zinc), float(d_tip), float(active_force), float(active_current), int(active_time),
+             int(n_pulses), int(cool_cyc), int(hold_cyc), float(freq))
 
-        const canvas = document.getElementById('weldCanvas');
-        const ctx = canvas.getContext('2d');
-        let currentFrameIndex = 0;
-        let isPlaying = false;
-        let animationTimer = null;
-        let simData = [];
+with tab_sim:
+    hs_used = heat_scale
+    with st.spinner("Solving transient heat-conduction / Joule-heating model..."):
+        if calibrate:
+            goal = float(nugget(active_current, active_time, active_force))
+            lo, hi = 0.2, 2.5
+            for _ in range(7):
+                mid = 0.5 * (lo + hi)
+                d_mid = run_sim(*base_args, round(mid, 4), float(contact_scale))["final_dia"]
+                if d_mid < goal: lo = mid
+                else: hi = mid
+            hs_used = round(0.5 * (lo + hi), 4)
+        res = run_sim(*base_args, float(hs_used), float(contact_scale))
 
-        function computeTransientTimeline() {
-            simData = [];
-            const tipEff = Math.pow(6.0 / dTip, 2);
-            const tMin = usePly3 ? Math.min(t1, t2, t3) : Math.min(t1, t2);
-            const expulsionThreshold = (5.5 * Math.sqrt(tMin)) * Math.pow(forceF / 300, 0.1) * Math.pow(dTip / 6.0, 0.2);
+    rec = res["rec"]; dia = res["final_dia"]; E = float(expulsion(active_force))
+    pen = res["max_pen"]
+    if dia < 0.5:
+        verdict = "❌ No nugget formed (cold weld)"
+    elif dia < target_min:
+        verdict = "❌ Undersized nugget (below minimum)"
+    elif dia > E or res["peak"] > 2300 or pen > 90:
+        verdict = "🔥 Expulsion / overheating risk"
+    else:
+        verdict = "✅ Good weld (inside weld window)"
+    m1, m2, m3, m4, m5 = st.columns(5)
+    m1.metric("Nugget diameter (2D sim)", f"{dia:.2f} mm", f"lobe model: {nugget(active_current, active_time, active_force):.2f} mm", delta_color="off")
+    m2.metric("Required minimum", f"{target_min:.2f} mm")
+    m3.metric("Penetration", f"{pen:.0f} %")
+    m4.metric("Peak temperature", f"{res['peak']:.0f} °C")
+    m5.metric("HAZ radius (727 °C)", f"{res['haz_r']:.1f} mm")
+    st.info(f"**2D simulation result:** {verdict}" + (f"   •   heat-input factor auto-calibrated to {hs_used:.2f}" if calibrate else ""))
 
-            for (let c = 1; c <= maxTime; c++) {
-                let transientDiameter = kApprox * Math.pow((currentI * tipEff) / 10000, 2) * (c / 10) * Math.pow(300 / forceF, 0.25) * 5.5;
-                if (transientDiameter < 0.1) transientDiameter = 0.0;
-                
-                simData.push({
-                    cycle: c,
-                    diameter: transientDiameter,
-                    min_target: targetMin,
-                    expulsion: expulsionThreshold
-                });
-            }
-        }
+    # ---- animated cross-section
+    top, bot, n_el, n_z, n_r = res["top"], res["bot"], res["n_el"], res["n_z"], res["n_r"]
+    DXmm = 0.2
+    z0 = max(0, top - 10); z1 = min(n_z, bot + 10)
+    cols = 40
+    xs_half = (np.arange(cols) + 0.5) * DXmm
+    xs = np.concatenate([-xs_half[::-1], xs_half])
+    ys = (np.arange(z0, z1) - top) * DXmm + DXmm / 2
 
-        function drawFrame(index) {
-            if (simData.length === 0) return;
-            const data = simData[index];
-            ctx.clearRect(0, 0, canvas.width, canvas.height);
-            
-            const centerX = canvas.width / 2;
-            const centerY = canvas.height / 2;
-            const scale = 36; 
-            const wBox = dTip * 2.8 * scale;
-            
-            const h1 = t1 * scale;
-            const h2 = t2 * scale;
-            const h3 = usePly3 ? (t3 * scale) : 0;
-            
-            const tipRadiusX = (dTip / 2) * scale;
-            const dia = data.diameter;
-            const expulsion = data.expulsion;
-            const thermalProgress = data.cycle / maxTime;
+    def field(Tm):
+        h = Tm[z0:z1, :cols]
+        return np.round(np.concatenate([h[:, ::-1], h], axis=1)).astype(int)
 
-            const totalStackH = h1 + h2 + h3;
-            const startY = centerY - (totalStackH / 2);
+    snaps = res["snaps"]; times_s = res["snap_t"]
+    frames = []
+    for i in range(len(snaps)):
+        Z = field(snaps[i])
+        frames.append(go.Frame(name=str(i), data=[
+            go.Heatmap(x=xs, y=ys, z=Z, zmin=25, zmax=1600, colorscale="Inferno", zsmooth="best", colorbar=dict(title="°C")),
+            go.Contour(x=xs, y=ys, z=Z, contours=dict(start=727, end=1500, size=773, coloring="none"), showscale=False,
+                       line=dict(color="white", width=2), hoverinfo="skip")]))
+    Z0 = field(snaps[-1])
+    figA = go.Figure(data=[
+        go.Heatmap(x=xs, y=ys, z=Z0, zmin=25, zmax=1600, colorscale="Inferno", zsmooth="best", colorbar=dict(title="°C")),
+        go.Contour(x=xs, y=ys, z=Z0, contours=dict(start=727, end=1500, size=773, coloring="none"), showscale=False,
+                   line=dict(color="white", width=2), hoverinfo="skip")], frames=frames)
+    shapes = []
+    zt = 0.0
+    for zi in [top] + [z for z in res["iface"] if top < z < bot] + [bot]:
+        yy = (zi - top) * DXmm
+        shapes.append(dict(type="line", x0=xs[0], x1=xs[-1], y0=yy, y1=yy, line=dict(color="rgba(200,200,200,0.5)", width=1, dash="dot")))
+    steps = [dict(method="animate", label=f"{times_s[i]*1000:.0f}", args=[[str(i)], dict(mode="immediate", frame=dict(duration=0, redraw=True), transition=dict(duration=0))]) for i in range(len(snaps))]
+    figA.update_layout(
+        title="Cross-section (axisymmetric): temperature field   •   white lines = HAZ (727 °C) and molten nugget (1500 °C)",
+        template="plotly_dark", height=520, margin=dict(l=40, r=20, b=40, t=60),
+        xaxis=dict(title="Radius (mm)", scaleanchor="y", scaleratio=1), yaxis=dict(title="Depth (mm)", autorange="reversed"), shapes=shapes,
+        updatemenus=[dict(type="buttons", direction="left", x=0.0, y=-0.12, buttons=[
+            dict(label="▶ Play", method="animate", args=[None, dict(frame=dict(duration=140, redraw=True), fromcurrent=True, transition=dict(duration=0))]),
+            dict(label="⏸ Pause", method="animate", args=[[None], dict(mode="immediate", frame=dict(duration=0, redraw=False))])])],
+        sliders=[dict(active=len(snaps) - 1, x=0.15, len=0.85, y=-0.05, currentvalue=dict(prefix="Time (ms): "), steps=steps)])
 
-            // --- 1. MATERIAL PLY STRUCTURE ASSEMBLY ---
-            ctx.fillStyle = 'rgba(100, 149, 237, 0.25)';
-            ctx.strokeStyle = 'rgba(100, 149, 237, 0.7)';
-            ctx.lineWidth = 1.5;
-            ctx.fillRect(centerX - wBox/2, startY, wBox, h1);
-            ctx.strokeRect(centerX - wBox/2, startY, wBox, h1);
+    # ---- curves
+    tms = rec["t"] * 1000
+    figC = go.Figure()
+    figC.add_trace(go.Scatter(x=tms, y=rec["dia"], name="Nugget dia (mm)", line=dict(color="#ffb300", width=3)))
+    figC.add_hline(y=target_min, line=dict(color="cyan", dash="dash"), annotation_text="min target")
+    figC.add_hline(y=E, line=dict(color="red", dash="dash"), annotation_text="expulsion limit")
+    figC.update_layout(title="Nugget growth", xaxis_title="Time (ms)", yaxis_title="Diameter (mm)", template="plotly_dark", height=330, margin=dict(l=40, r=20, b=40, t=50))
+    figR = go.Figure()
+    mask = rec["I"] > 0
+    figR.add_trace(go.Scatter(x=tms[mask], y=rec["rdyn"][mask], name="Dynamic resistance", line=dict(color="#69f0ae", width=3), mode="lines"))
+    figR.update_layout(title="Dynamic resistance (µΩ)", xaxis_title="Time (ms)", yaxis_title="R (µΩ)", template="plotly_dark", height=330, margin=dict(l=40, r=20, b=40, t=50))
+    figT = go.Figure()
+    figT.add_trace(go.Scatter(x=tms, y=rec["tmax"], name="Peak temperature in sheets", line=dict(color="#ff7043", width=3)))
+    figT.add_hline(y=1500, line=dict(color="white", dash="dot"), annotation_text="melting")
+    figT.update_layout(title="Peak temperature (°C)", xaxis_title="Time (ms)", yaxis_title="°C", template="plotly_dark", height=330, margin=dict(l=40, r=20, b=40, t=50))
 
-            ctx.fillStyle = 'rgba(144, 238, 144, 0.25)';
-            ctx.strokeStyle = 'rgba(144, 238, 144, 0.7)';
-            ctx.fillRect(centerX - wBox/2, startY + h1, wBox, h2);
-            ctx.strokeRect(centerX - wBox/2, startY + h1, wBox, h2);
+    st.plotly_chart(figA, use_container_width=True)
+    ca, cb, cc = st.columns(3)
+    ca.plotly_chart(figC, use_container_width=True)
+    cb.plotly_chart(figR, use_container_width=True)
+    cc.plotly_chart(figT, use_container_width=True)
+    st.caption("Press ▶ Play (or drag the time slider) to watch the nugget grow. The animation runs in your browser, so playback does not re-run the server. "
+               "Dynamic resistance falls as contact resistance collapses and the sheets heat — the typical shape seen in SORPAS and in real weld monitors.")
 
-            if (usePly3) {
-                ctx.fillStyle = 'rgba(220, 160, 220, 0.25)';
-                ctx.strokeStyle = 'rgba(220, 160, 220, 0.7)';
-                ctx.fillRect(centerX - wBox/2, startY + h1 + h2, wBox, h3);
-                ctx.strokeRect(centerX - wBox/2, startY + h1 + h2, wBox, h3);
-            }
-
-            // --- 2. ELECTRODES TRANSIENT THERMAL FOOTPRINTS ---
-            let topGrad = ctx.createLinearGradient(centerX, startY, centerX, startY - 30);
-            if (dia > 0) {
-                let tipHeatColor = "rgba(" + Math.floor(200 + 55 * thermalProgress) + ", " + Math.floor(69 + 40 * thermalProgress) + ", 0, 0.85)";
-                topGrad.addColorStop(0, tipHeatColor);
-                topGrad.addColorStop(0.35 * thermalProgress, 'rgba(180, 70, 30, 0.8)');
-                topGrad.addColorStop(1, 'rgba(180, 180, 180, 0.85)');
-            } else {
-                topGrad.addColorStop(0, 'rgba(180, 180, 180, 0.85)');
-            }
-            ctx.fillStyle = topGrad;
-            ctx.beginPath();
-            ctx.moveTo(centerX - tipRadiusX, startY);
-            ctx.lineTo(centerX + tipRadiusX, startY);
-            ctx.lineTo(centerX + tipRadiusX * 1.4, startY - 30);
-            ctx.lineTo(centerX - tipRadiusX * 1.4, startY - 30);
-            ctx.closePath();
-            ctx.fill();
-
-            let botGrad = ctx.createLinearGradient(centerX, startY + totalStackH, centerX, startY + totalStackH + 30);
-            if (dia > 0) {
-                let tipHeatColor = "rgba(" + Math.floor(200 + 55 * thermalProgress) + ", " + Math.floor(69 + 40 * thermalProgress) + ", 0, 0.85)";
-                botGrad.addColorStop(0, tipHeatColor);
-                botGrad.addColorStop(0.35 * thermalProgress, 'rgba(180, 70, 30, 0.8)');
-                botGrad.addColorStop(1, 'rgba(180, 180, 180, 0.85)');
-            } else {
-                botGrad.addColorStop(0, 'rgba(180, 180, 180, 0.85)');
-            }
-            ctx.fillStyle = botGrad;
-            ctx.beginPath();
-            ctx.moveTo(centerX - tipRadiusX, startY + totalStackH);
-            ctx.lineTo(centerX + tipRadiusX, startY + totalStackH);
-            ctx.lineTo(centerX + tipRadiusX * 1.4, startY + totalStackH + 30);
-            ctx.lineTo(centerX - tipRadiusX * 1.4, startY + totalStackH + 30);
-            ctx.closePath();
-            ctx.fill();
-
-            // --- 3. ADVANCED MULTI-PLY ASYMMETRIC BIAS ENGINE ---
-            if (dia > 0.05) {
-                const rNugget = (dia / 2) * scale;
-                const penetrationProgress = Math.min(1.0, 0.4 + (data.cycle / maxTime) * 0.6);
-                const hPenetration = ((totalStackH * 0.76) / 2) * penetrationProgress;
-
-                let balanceY = 0;
-                if (usePly3) {
-                    const midPointH = totalStackH / 2;
-                    const centerOfMass = (h1 * (h1/2) + h2 * (h1 + h2/2) + h3 * (h1 + h2 + h3/2)) / totalStackH;
-                    balanceY = centerOfMass - midPointH;
-                } else {
-                    balanceY = (t2 - t1) * scale * 0.22;
-                }
-                
-                const dynamicCenterY = centerY + (balanceY * thermalProgress);
-
-                // HAZ Footprint
-                ctx.fillStyle = 'rgba(255, 140, 0, 0.22)';
-                ctx.beginPath();
-                ctx.ellipse(centerX, dynamicCenterY, rNugget * 1.28, hPenetration * 1.15, 0, 0, 2 * Math.PI);
-                ctx.fill();
-
-                // Liquid Weld Pool Core
-                let poolGrad = ctx.createRadialGradient(centerX, dynamicCenterY, rNugget * 0.1, centerX, dynamicCenterY, rNugget);
-                if (dia >= expulsion) {
-                    poolGrad.addColorStop(0, '#ffffff');
-                    poolGrad.addColorStop(0.2, '#ffff00');
-                    poolGrad.addColorStop(0.6, '#ff0000');
-                    poolGrad.addColorStop(1, 'rgba(139, 0, 0, 0.9)');
-                    ctx.strokeStyle = '#ff0000';
-                } else {
-                    poolGrad.addColorStop(0, '#ffffff');
-                    poolGrad.addColorStop(0.25, '#ffcc00');
-                    poolGrad.addColorStop(0.65, '#9400d3');
-                    poolGrad.addColorStop(1, '#4b0082');
-                    ctx.strokeStyle = '#ffff00';
-                }
-                
-                ctx.fillStyle = poolGrad;
-                ctx.lineWidth = 2;
-                ctx.beginPath();
-                ctx.ellipse(centerX, dynamicCenterY, rNugget, hPenetration, 0, 0, 2 * Math.PI);
-                ctx.fill();
-                ctx.stroke();
-            }
-
-            document.getElementById('cycleLabel').innerText = "Cycle: " + data.cycle + " / " + maxTime + " (" + dia.toFixed(2) + " mm)";
-        }
-
-        function playbackLoop() {
-            if (!isPlaying) return;
-            currentFrameIndex++;
-            
-            if (currentFrameIndex >= simData.length) {
-                isPlaying = false;
-                if (animationTimer) clearTimeout(animationTimer);
-                return;
-            }
-            
-            drawFrame(currentFrameIndex);
-            animationTimer = setTimeout(playbackLoop, 120);
-        }
-
-        function startSimulationPlayback() {
-            if (!isPlaying) {
-                if (currentFrameIndex >= simData.length - 1) {
-                    currentFrameIndex = 0;
-                }
-                isPlaying = true;
-                playbackLoop();
-            }
-        }
-
-        function stopSimulationPlayback() {
-            isPlaying = false;
-            if (animationTimer) clearTimeout(animationTimer);
-        }
-
-        computeTransientTimeline();
-        drawFrame(0);
-    </script>
-    """
-
-    # --- RENDER GRAPHICS MATRIX ---
-    col1, col2 = st.columns([1, 1])
-    with col1: 
-        st.plotly_chart(fig, use_container_width=True)
-    with col2: 
-        components.html(canvas_html, height=460)
-        
-    st.divider()
-    
-    # --- PHYSICAL EVALUATION OPERATIONS ---
-    tip_eff_calc = (6.0 / d_tip)**2
-    final_dia_calc = k_approx * ((active_current * tip_eff_calc)/10000)**2 * (active_time/10) * (300/active_force)**0.25 * 5.5
-    expulsion_threshold_calc = (5.5 * np.sqrt(t_min)) * (active_force / 300)**0.1 * (d_tip / 6.0)**0.2
-    
-    # Mechanical Structural Equations
-    predicted_tss = (np.pi * (final_dia_calc ** 2) / 4.0) * uts_weighted / 1000.0
-    predicted_cts = predicted_tss * (0.24 + 0.36 * (1.0 - ce_weighted)) # Empirical CTS out-of-plane mapping
+# ======================================================================================
+# TAB 3 : STRENGTH & METALLURGY
+# ======================================================================================
+with tab_report:
+    src = st.radio("Nugget size used for strength estimate", ["Lobe model", "2D simulation"], horizontal=True)
+    d_use = float(nugget(active_current, active_time, active_force)) if src == "Lobe model" else float(dia)
+    expulsion_calc = float(expulsion(active_force))
+    predicted_tss = (np.pi * d_use ** 2 / 4.0) * uts_weighted / 1000.0
+    predicted_cts = predicted_tss * (0.24 + 0.36 * (1.0 - ce_weighted))
     ductility_ratio = predicted_cts / predicted_tss if predicted_tss > 0 else 0
-    
-    # Metallurgical Hardness Formulations
     peak_fz_hardness = 120 + 720 * ce_weighted
-    haz_softening_ratio = 0.84 if ce_weighted > 0.18 else 0.96
-    min_haz_hardness = peak_fz_hardness * haz_softening_ratio
-
-    # Fracture Mode Prediction Selection Matrix
-    if final_dia_calc < target_min:
-        predicted_failure_mode = "❌ Interfacial Shear Failure (Brittle Weld)"
+    min_haz_hardness = peak_fz_hardness * (0.84 if ce_weighted > 0.18 else 0.96)
+    if d_use < target_min:
+        mode = "❌ Interfacial Shear Failure (Brittle Weld)"
     elif (uts_weighted > 780) and (ce_weighted > 0.20):
-        predicted_failure_mode = "⚠️ Partial Plug / HAZ Necking Failure (Borderline High Strength)"
+        mode = "⚠️ Partial Plug / HAZ Necking Failure (Borderline High Strength)"
     else:
-        predicted_failure_mode = "✅ Full Button Pullout Failure (Ductile Base Material Overload)"
+        mode = "✅ Full Button Pullout Failure (Ductile Base Material Overload)"
+    st.subheader("📊 Geometric, Mechanical & Metallurgical Performance")
+    a1, a2, a3, a4 = st.columns(4)
+    a1.metric("Nugget size used", f"{d_use:.2f} mm")
+    a2.metric("Target min bound", f"{target_min:.2f} mm")
+    a3.metric("Expulsion threshold", f"{expulsion_calc:.2f} mm")
+    a4.metric("Tensile shear (TSS)", f"{predicted_tss:.2f} kN")
+    b1, b2, b3, b4 = st.columns(4)
+    b1.metric("Cross-tension (CTS)", f"{predicted_cts:.2f} kN")
+    b2.metric("Ductility ratio (CTS/TSS)", f"{ductility_ratio:.3f}")
+    b3.metric("Peak fusion hardness", f"{peak_fz_hardness:.1f} HV")
+    b4.metric("Minimum HAZ hardness", f"{min_haz_hardness:.1f} HV")
+    st.info(f"**Predicted failure mechanism:** {mode}")
 
-    # --- METRICS REPORT PANELS ---
-    st.subheader("📊 Geometric, Mechanical, & Metallurgical Performance Engine")
-    
-    # Row 1: Traditional Geometry and Basic Shear Strength
-    m1, m2, m3, m4 = st.columns(4)
-    m1.metric("Final Nugget Size", f"{round(final_dia_calc, 3)} mm")
-    m2.metric("Target Min Bound", f"{round(target_min, 2)} mm")
-    m3.metric("Expulsion Threshold", f"{round(expulsion_threshold_calc, 2)} mm")
-    m4.metric("Tensile Shear (TSS)", f"{round(predicted_tss, 2)} kN")
-    
-    st.write("") # Whitespace divider
-    
-    # Row 2: Advanced FEA Suite Analysis (SORPAS Calibration Metrics)
-    c1, c2, c3, c4 = st.columns(4)
-    c1.metric("Cross-Tension (CTS)", f"{round(predicted_cts, 2)} kN")
-    c2.metric("Ductility Ratio (CTS/TSS)", f"{round(ductility_ratio, 3)}")
-    c3.metric("Peak Fusion Hardness", f"{round(peak_fz_hardness, 1)} HV")
-    c4.metric("Minimum HAZ Hardness", f"{round(min_haz_hardness, 1)} HV")
-    
-    st.write("")
-    st.info(f"**Predicted Dynamic Failure Mechanism:** {predicted_failure_mode}")
+# ======================================================================================
+# TAB 4 : NOTES
+# ======================================================================================
+with tab_notes:
+    st.markdown("""
+**3D lobe + slice plane.** The lobe is the volume in (current, time, force) space where the predicted nugget is at least the minimum target (4·√t_min) and below the expulsion limit. The yellow plane cuts this volume; the 2D weld lobe on the right is the same cut, shown with the green weld window, the cyan minimum-nugget line and the red dashed expulsion line.
+
+**2D process simulation.** An axisymmetric (r–z) transient finite-difference model with: Joule heating in the sheets and copper electrodes, temperature-dependent resistivity, conductivity and heat capacity of steel, latent heat of fusion, contact resistance at electrode–sheet and sheet–sheet interfaces (falling with temperature and force), water-cooled electrode ends, multi-pulse schedules and hold time. The current path widens as the nugget grows.
+
+**Limits (please read).** The model is a teaching tool. It does not solve the electrical potential field, mechanical contact/indentation, expulsion dynamics, phase transformation or coating behaviour, and the contact-resistance constants are generic. Use the *Heat-input factor* or the calibrate option to align it with your own lab data; use validated software (e.g. SORPAS) and weld trials for production decisions.
+""")
