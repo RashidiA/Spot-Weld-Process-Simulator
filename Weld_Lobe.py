@@ -232,7 +232,7 @@ materials_db = {
 # SIDEBAR INPUTS
 # ======================================================================================
 with st.sidebar:
-    st.caption("Weld_Lobe v2.5")
+    st.caption("Weld_Lobe v2.6")
     basis = st.radio("Calculation basis", ["Factory Excel model (mild steel, 2-ply, Ø4 mm tip)", "Generic model (any material, 2–3 ply)"],
                      help="Factory model = the equations tuned from factory experiments (mild steel, 2 panels, Ø4 mm tip). Generic model = the earlier formula for other materials.")
     factory = basis.startswith("Factory")
@@ -412,26 +412,37 @@ with tab_lobe:
 
     try:
         # --- 3D volumetric lobe: the whole acceptable volume (target_min <= nugget <= expulsion) is filled with colour
-        ci = np.linspace(I_MIN, I_MAX, 30); ti = np.linspace(T_MIN, T_MAX, 22); fi = np.linspace(F_MIN, F_MAX, 22)
+        ci = np.linspace(I_MIN, I_MAX, 40); ti = np.linspace(T_MIN, T_MAX, 30); fi = np.linspace(F_MIN, F_MAX, 30)
         I3, T3, F3 = np.meshgrid(ci, ti, fi, indexing="ij")
         D3 = nugget(I3, T3, F3); EX3 = expulsion(F3) + 0.0 * D3
-        inside = (D3 >= target_min) & (D3 <= EX3)
-        V3 = np.where(inside, D3, 0.0)
-        c_lo, c_hi = float(target_min), float(max(EX3.max(), target_min * 1.05))
+        # continuous fields only (no masking) so every surface is interpolated smoothly
         if factory:
+            c_lo, c_hi = float(target_min), float(EXP_D)
+            val3 = D3
             vol_scale, edges = [], [e for e in [GEN_D, IMP_D, HI_D, EXP_D] if e > target_min + 1e-9]
             pts = [c_lo] + [e for e in edges if e < c_hi] + [c_hi]
             for lo_, hi_ in zip(pts[:-1], pts[1:]):
                 col = ZONE_COLORS[int(zone_index((lo_ + hi_) / 2.0, EXP_D + 1.0))]
                 vol_scale += [[(lo_ - c_lo) / (c_hi - c_lo), col], [(hi_ - c_lo) / (c_hi - c_lo), col]]
+            cbar_title = "Nugget Ø (mm)"
         else:
+            c_lo, c_hi = 0.0, 1.0
+            val3 = (D3 - target_min) / np.maximum(EX3 - target_min, 1e-9)      # 0 = minimum nugget, 1 = expulsion
             vol_scale = [[0, "#2e7d32"], [0.5, "#9ccc65"], [1, "#f9a825"]]
+            cbar_title = "Position in weld window"
         NOCAP = dict(x=dict(show=False), y=dict(show=False), z=dict(show=False))
         fig3 = go.Figure()
-        fig3.add_trace(go.Isosurface(x=I3.flatten(), y=T3.flatten(), z=F3.flatten(), value=V3.flatten(),
+        fig3.add_trace(go.Isosurface(x=I3.flatten(), y=T3.flatten(), z=F3.flatten(), value=val3.flatten(),
                                      isomin=c_lo + 0.01 * (c_hi - c_lo), isomax=c_hi - 0.01 * (c_hi - c_lo), surface_count=40,
-                                     cmin=c_lo, cmax=c_hi, colorscale=vol_scale, opacity=0.16, caps=NOCAP,
-                                     colorbar=dict(title="Nugget Ø (mm)", len=0.6), name="Acceptable weld lobe"))
+                                     cmin=c_lo, cmax=c_hi, colorscale=vol_scale, opacity=0.14, caps=NOCAP,
+                                     colorbar=dict(title=cbar_title, len=0.6), name="Acceptable weld lobe"))
+        # smooth limit borders (single continuous iso-surface each)
+        fig3.add_trace(go.Isosurface(x=I3.flatten(), y=T3.flatten(), z=F3.flatten(), value=(D3 - target_min).flatten(), isomin=0, isomax=0, surface_count=1,
+                                     colorscale=[[0, "#0d47a1"], [1, "#0d47a1"]], opacity=0.55, showscale=False, caps=NOCAP,
+                                     name="Minimum nugget limit", showlegend=True))
+        fig3.add_trace(go.Isosurface(x=I3.flatten(), y=T3.flatten(), z=F3.flatten(), value=(D3 - EX3).flatten(), isomin=0, isomax=0, surface_count=1,
+                                     colorscale=[[0, "#b71c1c"], [1, "#b71c1c"]], opacity=0.55, showscale=False, caps=NOCAP,
+                                     name="Expulsion limit", showlegend=True))
         # the adjustable plane
         if plane == "Force (kg)":
             gx, gy = np.meshgrid([I_MIN, I_MAX], [T_MIN, T_MAX]); gz = np.full_like(gx, pos, dtype=float)
