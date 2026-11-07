@@ -6,7 +6,13 @@ import numpy as np
 import pandas as pd
 import plotly.graph_objects as go
 
+import traceback
 st.set_page_config(page_title="Spot Welding Lobe & Process Simulator", layout="wide")
+
+def _show_error(where, exc):
+    st.error(f"⚠️ {where} failed: {exc}")
+    st.code(traceback.format_exc())
+
 st.title("🔬 Spot Welding Lobe & 2D Process Simulator")
 st.caption("3D weld lobe with an adjustable slice plane • 2D axisymmetric thermal simulation of nugget growth • learning tool (indicative results, not a replacement for validated FEA such as SORPAS)")
 
@@ -226,6 +232,7 @@ materials_db = {
 # SIDEBAR INPUTS
 # ======================================================================================
 with st.sidebar:
+    st.caption("Weld_Lobe v2.4")
     basis = st.radio("Calculation basis", ["Factory Excel model (mild steel, 2-ply, Ø4 mm tip)", "Generic model (any material, 2–3 ply)"],
                      help="Factory model = the equations tuned from factory experiments (mild steel, 2 panels, Ø4 mm tip). Generic model = the earlier formula for other materials.")
     factory = basis.startswith("Factory")
@@ -374,6 +381,24 @@ def zone_index(D, EX):
         return np.select([D > EX, D >= HI_D, D >= IMP_D, D >= GEN_D], [4, 3, 2, 1], 0)
     return np.select([D > EX, D >= target_min], [2, 1], 0)
 
+# ======================================================================================
+# TAB 1 : 3D LOBE WITH ADJUSTABLE PLANE  ->  LIVE 2D LOBE
+# ======================================================================================
+with tab_lobe:
+    try:
+        if factory:
+            d_target = float(nugget(I_REC, C_REC, F_REC))
+            st.markdown("#### Recommended setting (factory equations)")
+            r1, r2, r3, r4, r5 = st.columns(5)
+            r1.metric("Weld force", f"{F_REC:.0f} kg")
+            r2.metric("Weld time", f"{C_REC:.1f} cycles")
+            r3.metric("Weld current", f"{I_REC_KA:.2f} kA", "+20 % zinc" if is_zinc else None, delta_color="off")
+            r4.metric("Target nugget", f"{d_target:.2f} mm")
+            r5.metric("General / Important", f"{GEN_D:.1f} / {IMP_D:.1f} mm")
+
+    except Exception as _e:
+        _show_error('Recommended-setting panel', _e)
+
     c_ctrl, _ = st.columns([2, 1])
     with c_ctrl:
         plane = st.radio("Slice plane (fixed variable)", ["Force (kg)", "Time (cycles)", "Current (A)"], horizontal=True,
@@ -385,86 +410,89 @@ def zone_index(D, EX):
         else:
             pos = st.slider("Plane position: Current (A)", I_MIN, I_MAX, int(active_current), step=I_STEP)
 
-    # --- 3D volumetric lobe: the whole acceptable volume (target_min <= nugget <= expulsion) is filled with colour
-    ci = np.linspace(I_MIN, I_MAX, 30); ti = np.linspace(T_MIN, T_MAX, 22); fi = np.linspace(F_MIN, F_MAX, 22)
-    I3, T3, F3 = np.meshgrid(ci, ti, fi, indexing="ij")
-    D3 = nugget(I3, T3, F3); EX3 = expulsion(F3) + 0.0 * D3
-    inside = (D3 >= target_min) & (D3 <= EX3)
-    V3 = np.where(inside, D3, 0.0)
-    c_lo, c_hi = float(target_min), float(max(EX3.max(), target_min * 1.05))
-    if factory:
-        vol_scale, edges = [], [e for e in [GEN_D, IMP_D, HI_D, EXP_D] if e > target_min + 1e-9]
-        pts = [c_lo] + [e for e in edges if e < c_hi] + [c_hi]
-        for lo_, hi_ in zip(pts[:-1], pts[1:]):
-            col = ZONE_COLORS[int(zone_index((lo_ + hi_) / 2.0, EXP_D + 1.0))]
-            vol_scale += [[(lo_ - c_lo) / (c_hi - c_lo), col], [(hi_ - c_lo) / (c_hi - c_lo), col]]
-    else:
-        vol_scale = [[0, "#2e7d32"], [0.5, "#9ccc65"], [1, "#f9a825"]]
-    NOCAP = dict(x=dict(show=False), y=dict(show=False), z=dict(show=False))
-    fig3 = go.Figure()
     try:
-        fig3.add_trace(go.Volume(x=I3.flatten(), y=T3.flatten(), z=F3.flatten(), value=V3.flatten(), isomin=c_lo, isomax=c_hi, cmin=c_lo, cmax=c_hi,
-                                 opacity=0.22, surface_count=18, colorscale=vol_scale, caps=NOCAP, name="Acceptable weld lobe",
-                                 colorbar=dict(title="Nugget Ø (mm)", len=0.6)))
-    except Exception:   # fallback: two boundary surfaces
-        fig3.add_trace(go.Isosurface(x=I3.flatten(), y=T3.flatten(), z=F3.flatten(), value=(D3 - target_min).flatten(), isomin=0, isomax=0, surface_count=1,
-                                     colorscale=[[0, "#0d47a1"], [1, "#0d47a1"]], opacity=0.55, showscale=False, caps=NOCAP, name="Minimum nugget"))
-        fig3.add_trace(go.Isosurface(x=I3.flatten(), y=T3.flatten(), z=F3.flatten(), value=(D3 - EX3).flatten(), isomin=0, isomax=0, surface_count=1,
-                                     colorscale=[[0, "#bf360c"], [1, "#bf360c"]], opacity=0.55, showscale=False, caps=NOCAP, name="Expulsion"))
-    # the adjustable plane
-    if plane == "Force (kg)":
-        gx, gy = np.meshgrid([I_MIN, I_MAX], [T_MIN, T_MAX]); gz = np.full_like(gx, pos, dtype=float)
-    elif plane == "Time (cycles)":
-        gx, gz = np.meshgrid([I_MIN, I_MAX], [F_MIN, F_MAX]); gy = np.full_like(gx, pos, dtype=float)
-    else:
-        gy, gz = np.meshgrid([T_MIN, T_MAX], [F_MIN, F_MAX]); gx = np.full_like(gy, pos, dtype=float)
-    fig3.add_trace(go.Surface(x=gx, y=gy, z=gz, showscale=False, opacity=0.28, colorscale=[[0, "#263238"], [1, "#263238"]], name="Slice plane", showlegend=True))
-    fig3.add_trace(go.Scatter3d(x=[active_current], y=[active_time], z=[active_force], mode="markers",
-                                marker=dict(size=7, color="black", symbol="diamond"), name="Operating point"))
-    AX = dict(backgroundcolor="#eceff1", gridcolor="#90a4ae", showbackground=True, zerolinecolor="#546e7a", linecolor="#37474f", tickfont=dict(color="#263238"))
-    fig3.update_layout(scene=dict(xaxis=dict(title="Current (A)", range=[I_MIN, I_MAX], **AX), yaxis=dict(title="Time (cycles)", range=[T_MIN, T_MAX], **AX),
-                                  zaxis=dict(title="Force (kg)", range=[F_MIN, F_MAX], **AX)),
-                       margin=dict(l=0, r=0, b=0, t=30), height=620, template="plotly_white", paper_bgcolor="white",
-                       legend=dict(orientation="h", y=1.04), title="3D weld lobe (coloured volume = acceptable nugget, coloured by nugget size)")
+        # --- 3D volumetric lobe: the whole acceptable volume (target_min <= nugget <= expulsion) is filled with colour
+        ci = np.linspace(I_MIN, I_MAX, 30); ti = np.linspace(T_MIN, T_MAX, 22); fi = np.linspace(F_MIN, F_MAX, 22)
+        I3, T3, F3 = np.meshgrid(ci, ti, fi, indexing="ij")
+        D3 = nugget(I3, T3, F3); EX3 = expulsion(F3) + 0.0 * D3
+        inside = (D3 >= target_min) & (D3 <= EX3)
+        V3 = np.where(inside, D3, 0.0)
+        c_lo, c_hi = float(target_min), float(max(EX3.max(), target_min * 1.05))
+        if factory:
+            vol_scale, edges = [], [e for e in [GEN_D, IMP_D, HI_D, EXP_D] if e > target_min + 1e-9]
+            pts = [c_lo] + [e for e in edges if e < c_hi] + [c_hi]
+            for lo_, hi_ in zip(pts[:-1], pts[1:]):
+                col = ZONE_COLORS[int(zone_index((lo_ + hi_) / 2.0, EXP_D + 1.0))]
+                vol_scale += [[(lo_ - c_lo) / (c_hi - c_lo), col], [(hi_ - c_lo) / (c_hi - c_lo), col]]
+        else:
+            vol_scale = [[0, "#2e7d32"], [0.5, "#9ccc65"], [1, "#f9a825"]]
+        NOCAP = dict(x=dict(show=False), y=dict(show=False), z=dict(show=False))
+        fig3 = go.Figure()
+        fig3.add_trace(go.Isosurface(x=I3.flatten(), y=T3.flatten(), z=F3.flatten(), value=V3.flatten(),
+                                     isomin=c_lo + 0.01 * (c_hi - c_lo), isomax=c_hi - 0.01 * (c_hi - c_lo), surface_count=9,
+                                     cmin=c_lo, cmax=c_hi, colorscale=vol_scale, opacity=0.35, caps=NOCAP,
+                                     colorbar=dict(title="Nugget Ø (mm)", len=0.6), name="Acceptable weld lobe"))
+        # the adjustable plane
+        if plane == "Force (kg)":
+            gx, gy = np.meshgrid([I_MIN, I_MAX], [T_MIN, T_MAX]); gz = np.full_like(gx, pos, dtype=float)
+        elif plane == "Time (cycles)":
+            gx, gz = np.meshgrid([I_MIN, I_MAX], [F_MIN, F_MAX]); gy = np.full_like(gx, pos, dtype=float)
+        else:
+            gy, gz = np.meshgrid([T_MIN, T_MAX], [F_MIN, F_MAX]); gx = np.full_like(gy, pos, dtype=float)
+        fig3.add_trace(go.Surface(x=gx, y=gy, z=gz, showscale=False, opacity=0.28, colorscale=[[0, "#263238"], [1, "#263238"]], name="Slice plane", showlegend=True))
+        fig3.add_trace(go.Scatter3d(x=[active_current], y=[active_time], z=[active_force], mode="markers",
+                                    marker=dict(size=7, color="black", symbol="diamond"), name="Operating point"))
+        AX = dict(backgroundcolor="#eceff1", gridcolor="#90a4ae", showbackground=True, zerolinecolor="#546e7a", linecolor="#37474f", tickfont=dict(color="#263238"))
+        fig3.update_layout(scene=dict(xaxis=dict(title="Current (A)", range=[I_MIN, I_MAX], **AX), yaxis=dict(title="Time (cycles)", range=[T_MIN, T_MAX], **AX),
+                                      zaxis=dict(title="Force (kg)", range=[F_MIN, F_MAX], **AX)),
+                           margin=dict(l=0, r=0, b=0, t=30), height=620, template="plotly_white", paper_bgcolor="white",
+                           legend=dict(orientation="h", y=1.04), title="3D weld lobe (coloured volume = acceptable nugget, coloured by nugget size)")
 
-    # --- 2D weld lobe cut along the plane (fine grid -> smooth zone edges) + matching Excel-style table
-    NG = 180
-    NC = 70
-    if plane == "Force (kg)":
-        xs, ys = np.linspace(I_MIN, I_MAX, NG), np.linspace(T_MIN, T_MAX, NG)
-        fD = lambda X, Y: nugget(X, Y, pos); fE = lambda X, Y: expulsion(0.0 * X + pos)
-        xlab, ylab = "Current (A)", "Weld time (cycles)"; op = (active_current, active_time)
-        ttl = f"2D weld lobe at Force = {pos} kg"
-        tx = np.linspace(I_MIN, I_MAX, 15); ty = np.arange(T_MAX, T_MIN - 1, -1, dtype=float)
-        xfmt, yfmt = (lambda v: f"{v / 1000:.1f} kA"), (lambda v: f"{int(v)} cyc")
-    elif plane == "Time (cycles)":
-        xs, ys = np.linspace(I_MIN, I_MAX, NG), np.linspace(F_MIN, F_MAX, NG)
-        fD = lambda X, Y: nugget(X, pos, Y); fE = lambda X, Y: expulsion(Y)
-        xlab, ylab = "Current (A)", "Force (kg)"; op = (active_current, active_force)
-        ttl = f"2D weld lobe at Time = {pos} cycles"
-        tx = np.linspace(I_MIN, I_MAX, 15); ty = np.unique(np.round(np.linspace(F_MIN, F_MAX, 16)))[::-1]
-        xfmt, yfmt = (lambda v: f"{v / 1000:.1f} kA"), (lambda v: f"{int(v)} kg")
-    else:
-        xs, ys = np.linspace(T_MIN, T_MAX, NG), np.linspace(F_MIN, F_MAX, NG)
-        fD = lambda X, Y: nugget(pos, X, Y); fE = lambda X, Y: expulsion(Y)
-        xlab, ylab = "Weld time (cycles)", "Force (kg)"; op = (active_time, active_force)
-        ttl = f"2D weld lobe at Current = {pos} A"
-        tx = np.unique(np.round(np.linspace(T_MIN, T_MAX, 16))); ty = np.unique(np.round(np.linspace(F_MIN, F_MAX, 16)))[::-1]
-        xfmt, yfmt = (lambda v: f"{int(v)} cyc"), (lambda v: f"{int(v)} kg")
-    X, Y = np.meshgrid(xs, ys); D = fD(X, Y); EX = fE(X, Y) + 0.0 * D
-    xc, yc = np.linspace(xs[0], xs[-1], NC), np.linspace(ys[0], ys[-1], NC)
-    Xc, Yc = np.meshgrid(xc, yc); Dc = fD(Xc, Yc); EXc = fE(Xc, Yc) + 0.0 * Dc
-    fig2 = go.Figure()
-    fig2.add_trace(go.Heatmap(x=xs, y=ys, z=zone_index(D, EX), zmin=0, zmax=N_ZONE - 0.001, showscale=False, hoverinfo="skip", colorscale=ZONE_SCALE))
-    fig2.add_trace(go.Contour(x=xc, y=yc, z=Dc, showscale=False, contours_coloring="none", contours=dict(showlabels=True, labelfont=dict(size=10, color="#263238")),
-                              line=dict(color="rgba(38,50,56,0.55)", width=1), name="Nugget Ø (mm)", hovertemplate="Ø %{z:.2f} mm<extra></extra>"))
-    fig2.add_trace(go.Contour(x=xc, y=yc, z=Dc, showscale=False, contours_coloring="none", contours=dict(start=target_min, end=target_min, size=1),
-                              line=dict(color="#0d47a1", width=4), name="Minimum nugget", showlegend=True))
-    fig2.add_trace(go.Contour(x=xc, y=yc, z=Dc - EXc, showscale=False, contours_coloring="none", contours=dict(start=0, end=0, size=1),
-                              line=dict(color="#b71c1c", width=4, dash="dash"), name="Expulsion limit", showlegend=True))
-    fig2.add_trace(go.Scatter(x=[op[0]], y=[op[1]], mode="markers", marker=dict(color="black", size=14, symbol="cross", line=dict(color="white", width=1)), name="Operating point"))
-    fig2.update_layout(title=ttl, xaxis_title=xlab, yaxis_title=ylab, template="plotly_white", height=620,
-                       margin=dict(l=40, r=20, b=40, t=50), legend=dict(orientation="h", y=-0.15))
+    except Exception as _e:
+        _show_error('3D lobe figure', _e)
+
+    try:
+        # --- 2D weld lobe cut along the plane (fine grid -> smooth zone edges) + matching Excel-style table
+        NG = 180
+        NC = 70
+        if plane == "Force (kg)":
+            xs, ys = np.linspace(I_MIN, I_MAX, NG), np.linspace(T_MIN, T_MAX, NG)
+            fD = lambda X, Y: nugget(X, Y, pos); fE = lambda X, Y: expulsion(0.0 * X + pos)
+            xlab, ylab = "Current (A)", "Weld time (cycles)"; op = (active_current, active_time)
+            ttl = f"2D weld lobe at Force = {pos} kg"
+            tx = np.linspace(I_MIN, I_MAX, 15); ty = np.arange(T_MAX, T_MIN - 1, -1, dtype=float)
+            xfmt, yfmt = (lambda v: f"{v / 1000:.1f} kA"), (lambda v: f"{int(v)} cyc")
+        elif plane == "Time (cycles)":
+            xs, ys = np.linspace(I_MIN, I_MAX, NG), np.linspace(F_MIN, F_MAX, NG)
+            fD = lambda X, Y: nugget(X, pos, Y); fE = lambda X, Y: expulsion(Y)
+            xlab, ylab = "Current (A)", "Force (kg)"; op = (active_current, active_force)
+            ttl = f"2D weld lobe at Time = {pos} cycles"
+            tx = np.linspace(I_MIN, I_MAX, 15); ty = np.unique(np.round(np.linspace(F_MIN, F_MAX, 16)))[::-1]
+            xfmt, yfmt = (lambda v: f"{v / 1000:.1f} kA"), (lambda v: f"{int(v)} kg")
+        else:
+            xs, ys = np.linspace(T_MIN, T_MAX, NG), np.linspace(F_MIN, F_MAX, NG)
+            fD = lambda X, Y: nugget(pos, X, Y); fE = lambda X, Y: expulsion(Y)
+            xlab, ylab = "Weld time (cycles)", "Force (kg)"; op = (active_time, active_force)
+            ttl = f"2D weld lobe at Current = {pos} A"
+            tx = np.unique(np.round(np.linspace(T_MIN, T_MAX, 16))); ty = np.unique(np.round(np.linspace(F_MIN, F_MAX, 16)))[::-1]
+            xfmt, yfmt = (lambda v: f"{int(v)} cyc"), (lambda v: f"{int(v)} kg")
+        X, Y = np.meshgrid(xs, ys); D = fD(X, Y); EX = fE(X, Y) + 0.0 * D
+        xc, yc = np.linspace(xs[0], xs[-1], NC), np.linspace(ys[0], ys[-1], NC)
+        Xc, Yc = np.meshgrid(xc, yc); Dc = fD(Xc, Yc); EXc = fE(Xc, Yc) + 0.0 * Dc
+        fig2 = go.Figure()
+        fig2.add_trace(go.Heatmap(x=xs, y=ys, z=zone_index(D, EX), zmin=0, zmax=N_ZONE - 0.001, showscale=False, hoverinfo="skip", colorscale=ZONE_SCALE))
+        fig2.add_trace(go.Contour(x=xc, y=yc, z=Dc, showscale=False, contours_coloring="none", contours=dict(showlabels=True, labelfont=dict(size=10, color="#263238")),
+                                  line=dict(color="rgba(38,50,56,0.55)", width=1), name="Nugget Ø (mm)", hovertemplate="Ø %{z:.2f} mm<extra></extra>"))
+        fig2.add_trace(go.Contour(x=xc, y=yc, z=Dc, showscale=False, contours_coloring="none", contours=dict(start=target_min, end=target_min, size=1),
+                                  line=dict(color="#0d47a1", width=4), name="Minimum nugget", showlegend=True))
+        fig2.add_trace(go.Contour(x=xc, y=yc, z=Dc - EXc, showscale=False, contours_coloring="none", contours=dict(start=0, end=0, size=1),
+                                  line=dict(color="#b71c1c", width=4, dash="dash"), name="Expulsion limit", showlegend=True))
+        fig2.add_trace(go.Scatter(x=[op[0]], y=[op[1]], mode="markers", marker=dict(color="black", size=14, symbol="cross", line=dict(color="white", width=1)), name="Operating point"))
+        fig2.update_layout(title=ttl, xaxis_title=xlab, yaxis_title=ylab, template="plotly_white", height=620,
+                           margin=dict(l=40, r=20, b=40, t=50), legend=dict(orientation="h", y=-0.15))
+
+    except Exception as _e:
+        _show_error('2D lobe figure', _e)
 
     col3d, col2d = st.columns([1.15, 1])
     with col3d:
@@ -488,23 +516,31 @@ def zone_index(D, EX):
 
     # ---- Excel-style table = the same cross-section as the 2D lobe
     st.markdown(f"#### Lobe table — {ttl.replace('2D weld lobe at ', '')}  (nugget Ø in mm)")
-    TX, TY = np.meshgrid(tx, ty)
-    Dt = fD(TX, TY); Et = fE(TX, TY) + 0.0 * Dt
-    df = pd.DataFrame(Dt, index=[yfmt(v) for v in ty], columns=[xfmt(v) for v in tx])
-    Zt = zone_index(Dt, Et)
-    def _paint(_):
-        return pd.DataFrame([[f"background-color:{ZONE_COLORS[int(z)]};color:{'white' if int(z) == N_ZONE - 1 else '#212121'}" for z in row] for row in Zt], index=df.index, columns=df.columns)
-    st.dataframe(df.style.apply(_paint, axis=None).format("{:.1f}"), use_container_width=True, height=min(740, 38 + 35 * len(ty)))
+    try:
+        TX, TY = np.meshgrid(tx, ty)
+        Dt = fD(TX, TY); Et = fE(TX, TY) + 0.0 * Dt
+        df = pd.DataFrame(Dt, index=[yfmt(v) for v in ty], columns=[xfmt(v) for v in tx])
+        Zt = zone_index(Dt, Et)
+        def _paint(_):
+            return pd.DataFrame([[f"background-color:{ZONE_COLORS[int(z)]};color:{'white' if int(z) == N_ZONE - 1 else '#212121'}" for z in row] for row in Zt], index=df.index, columns=df.columns)
+        st.dataframe(df.style.apply(_paint, axis=None).format("{:.1f}"), use_container_width=True, height=min(740, 38 + 35 * len(ty)))
+
+    except Exception as _e:
+        _show_error('Lobe table', _e)
 
     # ---- nugget growth with weld time
-    cyc = np.linspace(0.2, max(12.0, T_MAX / 2.0), 60)
-    figG = go.Figure()
-    figG.add_trace(go.Scatter(x=cyc, y=nugget(active_current, cyc, active_force), mode="lines", line=dict(color="#0d47a1", width=3), name="Nugget Ø"))
-    for val, nm, col in [(GEN_D, "General", "#7cb342"), (IMP_D, "Important", "#1e88e5"), (float(expulsion(active_force)), "Expulsion", "#d84315")]:
-        figG.add_hline(y=val, line=dict(color=col, dash="dash"), annotation_text=nm)
-    figG.update_layout(title=f"Nugget growth at {active_current} A, {active_force} kg", xaxis_title="Weld time (cycles)", yaxis_title="Ø (mm)",
-                       template="plotly_white", height=320, margin=dict(l=40, r=20, b=40, t=50))
-    st.plotly_chart(figG, use_container_width=True)
+    try:
+        cyc = np.linspace(0.2, max(12.0, T_MAX / 2.0), 60)
+        figG = go.Figure()
+        figG.add_trace(go.Scatter(x=cyc, y=nugget(active_current, cyc, active_force), mode="lines", line=dict(color="#0d47a1", width=3), name="Nugget Ø"))
+        for val, nm, col in [(GEN_D, "General", "#7cb342"), (IMP_D, "Important", "#1e88e5"), (float(expulsion(active_force)), "Expulsion", "#d84315")]:
+            figG.add_hline(y=val, line=dict(color=col, dash="dash"), annotation_text=nm)
+        figG.update_layout(title=f"Nugget growth at {active_current} A, {active_force} kg", xaxis_title="Weld time (cycles)", yaxis_title="Ø (mm)",
+                           template="plotly_white", height=320, margin=dict(l=40, r=20, b=40, t=50))
+        st.plotly_chart(figG, use_container_width=True)
+
+    except Exception as _e:
+        _show_error('Nugget growth chart', _e)
 
 # ======================================================================================
 # TAB 2 : 2D AXISYMMETRIC PROCESS SIMULATION
