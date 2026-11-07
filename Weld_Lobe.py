@@ -38,7 +38,7 @@ _RHO_CU = np.interp(_TT, [0, 500, 1000], [0.017, 0.045, 0.08]) * 1e-6
 
 
 def simulate_weld(layers, zinc, d_tip, force_kg, current, weld_cyc, pulses, cool_cyc, hold_cyc,
-                  freq=50.0, heat_scale=1.0, contact_scale=1.0):
+                  freq=50.0, heat_scale=1.0, contact_scale=1.0, stop_dia=0.0):
     """Axisymmetric transient electro-thermal model of a resistance spot weld.
     layers: tuple of (thickness_mm, resistivity_factor). Returns dict of results."""
     n_r = int(round(R_DOM / DX))
@@ -74,12 +74,12 @@ def simulate_weld(layers, zinc, d_tip, force_kg, current, weld_cyc, pulses, cool
     for z in range(n_z):
         if z < top_sheet:
             h = (top_sheet - 1 - z + 0.5) * DX
-            rad = min(EL_R, a + h * tan30 * 1.6)
+            rad = a + (EL_R - a) * (1.0 - np.exp(-h / 2.0e-3))
             active[z] = r_c <= rad
             el_rad[z] = rad
         elif z >= bot_sheet:
             h = (z - bot_sheet + 0.5) * DX
-            rad = min(EL_R, a + h * tan30 * 1.6)
+            rad = a + (EL_R - a) * (1.0 - np.exp(-h / 2.0e-3))
             active[z] = r_c <= rad
             el_rad[z] = rad
         else:
@@ -108,7 +108,7 @@ def simulate_weld(layers, zinc, d_tip, force_kg, current, weld_cyc, pulses, cool
     rc_el0 = 1.6e-9 * el_scale
     F_ref = 2500.0
     a_cur = a * 1.05
-    snap_every = max(1, int(round(cycle / dt)))
+    snap_every = max(1, int(round(cycle / dt / 2.0)))
     rec_every = max(1, int(round(1e-3 / dt)))
 
     cond_mask = (active & (mat > 0)).astype(float)
@@ -120,6 +120,7 @@ def simulate_weld(layers, zinc, d_tip, force_kg, current, weld_cyc, pulses, cool
     t = 0.0
     step = 0
     zeros0 = np.zeros_like(T)
+    stopped, stop_t = False, None
     J2 = None
     Ji2 = None
     for I, dur in sched:
@@ -188,15 +189,21 @@ def simulate_weld(layers, zinc, d_tip, force_kg, current, weld_cyc, pulses, cool
                 rec['tmax'].append(float(T[top_sheet:bot_sheet].max()))
                 rec['rdyn'].append(P / (I * I) * 1e6 if I > 0 else 0.0)
                 rec['I'].append(I)
-            if step % snap_every == 0:
+            if stop_dia > 0 and I > 0 and step % rec_every == 0 and rec['dia'] and rec['dia'][-1] >= stop_dia:
+                stopped, stop_t = True, t
+            if step % snap_every == 0 or stopped:
                 snaps.append(T.astype(np.float32).copy()); snap_t.append(t)
+            if stopped:
+                break
+        if stopped:
+            break
     snaps.append(T.astype(np.float32).copy()); snap_t.append(t)
     for kk in rec: rec[kk] = np.array(rec[kk])
     sheet_haz = (T[top_sheet:bot_sheet] >= T_HAZ)
     haz_r = (sheet_haz.any(axis=0).nonzero()[0].max() + 1) * DX * 1e3 if sheet_haz.any() else 0.0
     return dict(rec=rec, snaps=np.array(snaps), snap_t=np.array(snap_t), n_el=n_el, top=top_sheet,
                 bot=bot_sheet, n_z=n_z, n_r=n_r, active=active, haz_r=haz_r,
-                iface=[z for _, z in iface], final_dia=float(rec['dia'].max() if len(rec['dia']) else 0),
+                iface=[z for _, z in iface], stopped=stopped, stop_t=(stop_t if stop_t is not None else t), final_dia=float(rec['dia'].max() if len(rec['dia']) else 0),
                 max_pen=float(rec['pen'].max() if len(rec['pen']) else 0), peak=float(rec['tmax'].max()))
 
 
@@ -232,7 +239,7 @@ materials_db = {
 # SIDEBAR INPUTS
 # ======================================================================================
 with st.sidebar:
-    st.caption("Weld_Lobe v2.6")
+    st.caption("Weld_Lobe v2.7")
     basis = st.radio("Calculation basis", ["Factory Excel model (mild steel, 2-ply, Ø4 mm tip)", "Generic model (any material, 2–3 ply)"],
                      help="Factory model = the equations tuned from factory experiments (mild steel, 2 panels, Ø4 mm tip). Generic model = the earlier formula for other materials.")
     factory = basis.startswith("Factory")
@@ -557,8 +564,8 @@ with tab_lobe:
 # TAB 2 : 2D AXISYMMETRIC PROCESS SIMULATION
 # ======================================================================================
 @st.cache_data(show_spinner=False, max_entries=24)
-def run_sim(layers, zinc, d_tip, force, current, wcyc, pulses, ccyc, hcyc, freq, hs, cs):
-    return simulate_weld(layers, zinc, d_tip, force, current, wcyc, pulses, ccyc, hcyc, freq, hs, cs)
+def run_sim(layers, zinc, d_tip, force, current, wcyc, pulses, ccyc, hcyc, freq, hs, cs, stop_dia=0.0):
+    return simulate_weld(layers, zinc, d_tip, force, current, wcyc, pulses, ccyc, hcyc, freq, hs, cs, stop_dia)
 
 sim_layers = tuple((t, p["res_factor"]) for t, p in zip(layers_t, layers_p))
 base_args = (sim_layers, bool(is_zinc), float(d_tip), float(active_force), float(active_current), int(active_time),
@@ -567,6 +574,8 @@ base_args = (sim_layers, bool(is_zinc), float(d_tip), float(active_force), float
 with tab_sim:
     run_it = st.toggle("▶ Run 2D simulation", value=False, key="run2d",
                        help="Switch on to solve the 2D thermal model (a few seconds). It is off by default so the lobe tab stays fast.")
+    stop_at_target = st.checkbox("Stop the simulation when the target nugget diameter is reached", value=True,
+                                 help="The weld current is cut as soon as the molten nugget reaches the required minimum diameter (sidebar: General / Important spot).")
     dia = 0.0
     if not run_it:
         st.info("Switch on **▶ Run 2D simulation** to solve nugget growth for the current settings (sidebar). Results are cached, so moving the lobe plane is not slowed down.")
@@ -578,15 +587,17 @@ with tab_sim:
                 lo, hi = 0.2, 2.5
                 for _ in range(7):
                     mid = 0.5 * (lo + hi)
-                    d_mid = run_sim(*base_args, round(mid, 4), float(contact_scale))["final_dia"]
+                    d_mid = run_sim(*base_args, round(mid, 4), float(contact_scale), 0.0)["final_dia"]
                     if d_mid < goal: lo = mid
                     else: hi = mid
                 hs_used = round(0.5 * (lo + hi), 4)
-            res = run_sim(*base_args, float(hs_used), float(contact_scale))
+            res = run_sim(*base_args, float(hs_used), float(contact_scale), float(target_min) if stop_at_target else 0.0)
 
         rec = res["rec"]; dia = res["final_dia"]; E = float(expulsion(active_force))
         pen = res["max_pen"]
-        if dia < 0.5:
+        if res["stopped"]:
+            verdict = f"✅ Target nugget Ø {target_min:.2f} mm reached at {res['stop_t'] * 1000:.0f} ms ({res['stop_t'] * freq:.1f} cycles) — simulation stopped"
+        elif dia < 0.5:
             verdict = "❌ No nugget formed (cold weld)"
         elif dia < target_min:
             verdict = "❌ Undersized nugget (below minimum)"
@@ -602,69 +613,66 @@ with tab_sim:
         m5.metric("HAZ radius (727 °C)", f"{res['haz_r']:.1f} mm")
         st.info(f"**2D simulation result:** {verdict}" + (f"   •   heat-input factor auto-calibrated to {hs_used:.2f}" if calibrate else ""))
 
-        # ---- animated cross-section
+        # ---- animated cross-section (SORPAS-style: electrodes + sheets, rainbow temperature scale, molten nugget in purple)
         top, bot, n_el, n_z, n_r = res["top"], res["bot"], res["n_el"], res["n_z"], res["n_r"]
         DXmm = 0.2
-        z0 = max(0, top - 10); z1 = min(n_z, bot + 10)
-        cols = 40
-        xs_half = (np.arange(cols) + 0.5) * DXmm
+        act = res["active"]
+        xs_half = (np.arange(n_r) + 0.5) * DXmm
         xs = np.concatenate([-xs_half[::-1], xs_half])
-        ys = (np.arange(z0, z1) - top) * DXmm + DXmm / 2
+        ys = (np.arange(n_z) - top) * DXmm + DXmm / 2
+        JET = [[0.00, "#0000ff"], [0.14, "#0080ff"], [0.28, "#00ffff"], [0.42, "#00ff40"], [0.56, "#ffff00"],
+               [0.70, "#ff8000"], [0.85, "#ff1500"], [0.915, "#d0007a"], [1.00, "#800080"]]
+        TMIN, TMAX = 20.0, 1500.0
+        tick_v = np.linspace(TMIN, TMAX, 8)
+        cbar = dict(title="Temperature (°C)", tickvals=list(tick_v), ticktext=[f"{v:.3E}" for v in tick_v], thickness=18, len=0.95)
 
         def field(Tm):
-            h = Tm[z0:z1, :cols]
-            return np.round(np.concatenate([h[:, ::-1], h], axis=1)).astype(int)
+            h = np.where(act, Tm, np.nan)
+            return np.round(np.concatenate([h[:, ::-1], h], axis=1))
 
         snaps = res["snaps"]; times_s = res["snap_t"]
-        frames = []
-        for i in range(len(snaps)):
-            Z = field(snaps[i])
-            frames.append(go.Frame(name=str(i), data=[
-                go.Heatmap(x=xs, y=ys, z=Z, zmin=25, zmax=1600, colorscale="Inferno", zsmooth="best", colorbar=dict(title="°C")),
-                go.Contour(x=xs, y=ys, z=Z, contours=dict(start=727, end=1500, size=773, coloring="none"), showscale=False,
-                           line=dict(color="white", width=2), hoverinfo="skip")]))
-        Z0 = field(snaps[-1])
-        figA = go.Figure(data=[
-            go.Heatmap(x=xs, y=ys, z=Z0, zmin=25, zmax=1600, colorscale="Inferno", zsmooth="best", colorbar=dict(title="°C")),
-            go.Contour(x=xs, y=ys, z=Z0, contours=dict(start=727, end=1500, size=773, coloring="none"), showscale=False,
-                       line=dict(color="white", width=2), hoverinfo="skip")], frames=frames)
+        def tlabel(i):
+            return f"Temperature field   t = {times_s[i] * 1000:.0f} ms  ({times_s[i] * freq:.1f} cycles)" + ("   — target nugget reached, stopped" if (res["stopped"] and i == len(snaps) - 1) else "")
+        frames = [go.Frame(name=str(i), traces=[0], data=[go.Heatmap(x=xs, y=ys, z=field(snaps[i]), zmin=TMIN, zmax=TMAX, colorscale=JET, zsmooth="best", colorbar=cbar)],
+                           layout=go.Layout(title_text=tlabel(i))) for i in range(len(snaps))]
+        figA = go.Figure(data=[go.Heatmap(x=xs, y=ys, z=field(snaps[-1]), zmin=TMIN, zmax=TMAX, colorscale=JET, zsmooth="best", colorbar=cbar,
+                                          hovertemplate="r %{x:.1f} mm, z %{y:.1f} mm: %{z:.0f} °C<extra></extra>")], frames=frames)
         shapes = []
-        zt = 0.0
-        for zi in [top] + [z for z in res["iface"] if top < z < bot] + [bot]:
+        for zi in [z for z in res["iface"] if top < z < bot]:
             yy = (zi - top) * DXmm
-            shapes.append(dict(type="line", x0=xs[0], x1=xs[-1], y0=yy, y1=yy, line=dict(color="rgba(200,200,200,0.5)", width=1, dash="dot")))
+            shapes.append(dict(type="line", x0=xs[0], x1=xs[-1], y0=yy, y1=yy, line=dict(color="rgba(255,255,255,0.9)", width=1)))
         steps = [dict(method="animate", label=f"{times_s[i]*1000:.0f}", args=[[str(i)], dict(mode="immediate", frame=dict(duration=0, redraw=True), transition=dict(duration=0))]) for i in range(len(snaps))]
         figA.update_layout(
-            title="Cross-section (axisymmetric): temperature field   •   white lines = HAZ (727 °C) and molten nugget (1500 °C)",
-            template="plotly_dark", height=520, margin=dict(l=40, r=20, b=40, t=60),
-            xaxis=dict(title="Radius (mm)", scaleanchor="y", scaleratio=1), yaxis=dict(title="Depth (mm)", autorange="reversed"), shapes=shapes,
-            updatemenus=[dict(type="buttons", direction="left", x=0.0, y=-0.12, buttons=[
-                dict(label="▶ Play", method="animate", args=[None, dict(frame=dict(duration=140, redraw=True), fromcurrent=True, transition=dict(duration=0))]),
+            title=tlabel(len(snaps) - 1), template="plotly_white", plot_bgcolor="white", paper_bgcolor="white", height=560, margin=dict(l=40, r=20, b=60, t=60),
+            xaxis=dict(title="Radius (mm)", scaleanchor="y", scaleratio=1, showgrid=False, zeroline=False, range=[xs[0], xs[-1]]),
+            yaxis=dict(title="Depth (mm)", autorange="reversed", showgrid=False, zeroline=False), shapes=shapes,
+            updatemenus=[dict(type="buttons", direction="left", x=0.0, y=-0.1, buttons=[
+                dict(label="▶ Play", method="animate", args=[None, dict(frame=dict(duration=120, redraw=True), fromcurrent=True, transition=dict(duration=0))]),
                 dict(label="⏸ Pause", method="animate", args=[[None], dict(mode="immediate", frame=dict(duration=0, redraw=False))])])],
-            sliders=[dict(active=len(snaps) - 1, x=0.15, len=0.85, y=-0.05, currentvalue=dict(prefix="Time (ms): "), steps=steps)])
+            sliders=[dict(active=len(snaps) - 1, x=0.15, len=0.85, y=-0.03, currentvalue=dict(prefix="Time (ms): "), steps=steps)])
 
         # ---- curves
         tms = rec["t"] * 1000
         figC = go.Figure()
         figC.add_trace(go.Scatter(x=tms, y=rec["dia"], name="Nugget dia (mm)", line=dict(color="#ffb300", width=3)))
-        figC.add_hline(y=target_min, line=dict(color="cyan", dash="dash"), annotation_text="min target")
-        figC.add_hline(y=E, line=dict(color="red", dash="dash"), annotation_text="expulsion limit")
-        figC.update_layout(title="Nugget growth", xaxis_title="Time (ms)", yaxis_title="Diameter (mm)", template="plotly_dark", height=330, margin=dict(l=40, r=20, b=40, t=50))
+        figC.add_hline(y=target_min, line=dict(color="#0d47a1", dash="dash"), annotation_text="min target")
+        figC.add_hline(y=E, line=dict(color="#b71c1c", dash="dash"), annotation_text="expulsion limit")
+        figC.update_layout(title="Nugget growth", xaxis_title="Time (ms)", yaxis_title="Diameter (mm)", template="plotly_white", height=330, margin=dict(l=40, r=20, b=40, t=50))
         figR = go.Figure()
         mask = rec["I"] > 0
         figR.add_trace(go.Scatter(x=tms[mask], y=rec["rdyn"][mask], name="Dynamic resistance", line=dict(color="#69f0ae", width=3), mode="lines"))
-        figR.update_layout(title="Dynamic resistance (µΩ)", xaxis_title="Time (ms)", yaxis_title="R (µΩ)", template="plotly_dark", height=330, margin=dict(l=40, r=20, b=40, t=50))
+        figR.update_layout(title="Dynamic resistance (µΩ)", xaxis_title="Time (ms)", yaxis_title="R (µΩ)", template="plotly_white", height=330, margin=dict(l=40, r=20, b=40, t=50))
         figT = go.Figure()
         figT.add_trace(go.Scatter(x=tms, y=rec["tmax"], name="Peak temperature in sheets", line=dict(color="#ff7043", width=3)))
-        figT.add_hline(y=1500, line=dict(color="white", dash="dot"), annotation_text="melting")
-        figT.update_layout(title="Peak temperature (°C)", xaxis_title="Time (ms)", yaxis_title="°C", template="plotly_dark", height=330, margin=dict(l=40, r=20, b=40, t=50))
+        figT.add_hline(y=1500, line=dict(color="#37474f", dash="dot"), annotation_text="melting")
+        figT.update_layout(title="Peak temperature (°C)", xaxis_title="Time (ms)", yaxis_title="°C", template="plotly_white", height=330, margin=dict(l=40, r=20, b=40, t=50))
 
         st.plotly_chart(figA, use_container_width=True)
         ca, cb, cc = st.columns(3)
         ca.plotly_chart(figC, use_container_width=True)
         cb.plotly_chart(figR, use_container_width=True)
         cc.plotly_chart(figT, use_container_width=True)
-        st.caption("Press ▶ Play (or drag the time slider) to watch the nugget grow. The animation runs in your browser, so playback does not re-run the server. "
+        st.caption("Press ▶ Play (or drag the time slider) to watch the nugget grow (purple = molten, above 1500 °C). The animation runs in your browser, so playback does not re-run the server. "
                    "Dynamic resistance falls as contact resistance collapses and the sheets heat — the typical shape seen in SORPAS and in real weld monitors.")
 
 # ======================================================================================
