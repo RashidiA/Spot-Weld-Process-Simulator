@@ -3,6 +3,7 @@
 # SORPAS-style 2D axisymmetric transient process simulation (temperature field, nugget growth, dynamic resistance).
 import streamlit as st
 import numpy as np
+import pandas as pd
 import plotly.graph_objects as go
 
 st.set_page_config(page_title="Spot Welding Lobe & Process Simulator", layout="wide")
@@ -167,7 +168,12 @@ def simulate_weld(layers, zinc, d_tip, force_kg, current, weld_cyc, pulses, cool
                 sh = T[top_sheet:bot_sheet] >= T_LIQ
                 if sh.any():
                     cols = sh.any(axis=0).nonzero()[0]
-                    dia = 2 * (cols.max() + 1) * DX * 1e3
+                    jj = int(cols.max())
+                    zz = top_sheet + int(sh[:, jj].nonzero()[0][0])
+                    Tj = T[zz, jj]
+                    Tn_ = T[zz, jj + 1] if jj + 1 < n_r else Tj - 1.0
+                    frac = min(1.0, max(0.0, (Tj - T_LIQ) / max(Tj - Tn_, 1e-9)))
+                    dia = 2 * (jj + 0.5 + frac) * DX * 1e3
                     pen = sh[:, 0].sum() * DX / ((bot_sheet - top_sheet) * DX) * 100.0
                 else:
                     dia, pen = 0.0, 0.0
@@ -220,39 +226,38 @@ materials_db = {
 # SIDEBAR INPUTS
 # ======================================================================================
 with st.sidebar:
+    basis = st.radio("Calculation basis", ["Factory Excel model (mild steel, 2-ply, Ø4 mm tip)", "Generic model (any material, 2–3 ply)"],
+                     help="Factory model = the equations tuned from factory experiments (mild steel, 2 panels, Ø4 mm tip). Generic model = the earlier formula for other materials.")
+    factory = basis.startswith("Factory")
+
     st.header("1. Sheet stack")
-    mat1 = st.selectbox("Ply 1 Material (Top)", list(materials_db.keys()))
-    t1 = st.slider("Thickness 1 (mm)", 0.5, 3.0, 1.0, step=0.1)
-    mat2 = st.selectbox("Ply 2 Material (Middle)", list(materials_db.keys()), index=2)
-    t2 = st.slider("Thickness 2 (mm)", 0.5, 3.0, 1.2, step=0.1)
-    mat3_selection = st.selectbox("Ply 3 Material (Bottom)", ["None (Revert to 2-Ply)"] + list(materials_db.keys()), index=0)
-    use_ply3 = mat3_selection != "None (Revert to 2-Ply)"
-    t3 = st.slider("Thickness 3 (mm)", 0.5, 3.0, 0.8, step=0.1) if use_ply3 else 0.0
+    if factory:
+        st.caption("Mild steel, 2 panels (equations tuned to factory experiments).")
+        mat1 = mat2 = "Mild Steel (JSC270)"
+        t1 = st.slider("Thickness 1 (mm)", 0.5, 3.0, 0.65, step=0.05)
+        t2 = st.slider("Thickness 2 (mm)", 0.5, 3.0, 0.65, step=0.05)
+        mat3_selection, use_ply3, t3 = "None (Revert to 2-Ply)", False, 0.0
+    else:
+        mat1 = st.selectbox("Ply 1 Material (Top)", list(materials_db.keys()))
+        t1 = st.slider("Thickness 1 (mm)", 0.5, 3.0, 1.0, step=0.1)
+        mat2 = st.selectbox("Ply 2 Material (Middle)", list(materials_db.keys()), index=2)
+        t2 = st.slider("Thickness 2 (mm)", 0.5, 3.0, 1.2, step=0.1)
+        mat3_selection = st.selectbox("Ply 3 Material (Bottom)", ["None (Revert to 2-Ply)"] + list(materials_db.keys()), index=0)
+        use_ply3 = mat3_selection != "None (Revert to 2-Ply)"
+        t3 = st.slider("Thickness 3 (mm)", 0.5, 3.0, 0.8, step=0.1) if use_ply3 else 0.0
 
     st.header("2. Electrodes")
-    is_zinc = st.checkbox("Zinc Coated (GA/GI)?")
-    d_tip = st.slider("Tip Diameter (mm)", 4.0, 10.0, 6.0, step=0.5)
-    k_base = st.slider("Base k-factor (lobe model)", 0.10, 0.60, 0.35)
+    is_zinc = st.checkbox("Zinc Coated (GA/GI)?", help="Factory rule: increase welding current by 20 % for zinc-coated sheet.")
+    if factory:
+        d_tip, k_base = 4.0, 0.35
+        st.caption("Electrode tip Ø 4.0 mm (fixed by the factory equations).")
+    else:
+        d_tip = st.slider("Tip Diameter (mm)", 4.0, 10.0, 6.0, step=0.5)
+        k_base = st.slider("Base k-factor (lobe model)", 0.10, 0.60, 0.35)
 
-    st.header("3. Operating point")
-    active_current = st.slider("Weld current (A)", 5000, 13000, 9500, step=100)
-    active_time = st.slider("Weld time (cycles)", 3, 24, 16, step=1)
-    active_force = st.slider("Electrode force (kg)", 100, 450, 250, step=10)
-
-    st.header("4. Schedule (2D simulation)")
-    freq = st.radio("Mains frequency", [50, 60], horizontal=True)
-    n_pulses = st.slider("Number of pulses", 1, 3, 1)
-    cool_cyc = st.slider("Cool time between pulses (cycles)", 0, 10, 4) if n_pulses > 1 else 0
-    hold_cyc = st.slider("Hold time after weld (cycles)", 0, 10, 4)
-    with st.expander("Advanced thermal model"):
-        heat_scale = st.slider("Heat-input factor", 0.3, 1.5, 0.75, step=0.05, help="Scales all Joule heating in the 2D model.")
-        contact_scale = st.slider("Contact resistance factor", 0.2, 3.0, 1.0, step=0.1)
-        calibrate = st.checkbox("Calibrate 2D model to the lobe formula at the operating point", value=False,
-                                help="Adjusts the heat-input factor automatically so the 2D nugget equals the lobe-model nugget at this operating point.")
-
-# ======================================================================================
-# LOBE MODEL (same formulas as before)
-# ======================================================================================
+# --------------------------------------------------------------------------------------
+# stack properties
+# --------------------------------------------------------------------------------------
 layers_p = [materials_db[mat1], materials_db[mat2]] + ([materials_db[mat3_selection]] if use_ply3 else [])
 layers_t = [t1, t2] + ([t3] if use_ply3 else [])
 total_t = sum(layers_t)
@@ -262,51 +267,134 @@ res_weighted = sum(t * p["res_factor"] for t, p in zip(layers_t, layers_p)) / to
 uts_weighted = sum(t * p["uts"] for t, p in zip(layers_t, layers_p)) / total_t
 ce_weighted = sum(t * p["ce"] for t, p in zip(layers_t, layers_p)) / total_t
 
+# --------------------------------------------------------------------------------------
+# FACTORY EQUATIONS (Excel "WCCT Initial Condition Approximation", mild steel, 2 panels, Ø4 mm tip)
+#   recommended force  F  = ((0.3428 t² + 1.327 t + 0.5865) * 1000) / 9.81         [kg]   t = t_min (mm)
+#   recommended time   c  = 10 * t_min                                              [cycles]
+#   recommended current I = f * sqrt( 9.7*3.14*(d²/4)*t_total / (0.24*(1e-4*c*0.02)) ) / 1000   [kA]
+#                           f = 1.2 if t_min >= 1 else 1.16 ; d = general-spot nugget
+#   nugget diameter    d = sqrt( 4*1.2*I²*0.241e-4*(0.02*cycles) / ((F/F_rec)*9.7*t_total*3.14) )
+# --------------------------------------------------------------------------------------
+F_REC = ((0.3428 * t_min ** 2 + 1.327 * t_min + 0.5865) * 1000.0) / 9.81
+C_REC = 10.0 * t_min
+with st.sidebar:
+    with st.expander("Nugget size criteria (× √t_min)"):
+        k_gen = st.number_input("General spot  (Ø = k·√t)", value=4.1, step=0.1, help="0.65 + 0.65 mm gives 3.3 mm, as in the factory sheet.")
+        k_imp = st.number_input("Important spot  (Ø = k·√t)", value=5.0, step=0.1, help="0.65 + 0.65 mm gives 4.0 mm, as in the factory sheet.")
+        k_hi = st.number_input("Upper edge of 'important' band (k·√t)", value=6.0, step=0.1)
+        k_exp = st.number_input("Expulsion limit (k·√t)", value=9.0, step=0.1)
+        st.caption("These factors were inferred from your Excel lobe table (colour boundaries). Edit them to match your factory standard.")
+GEN_D, IMP_D, HI_D, EXP_D = k_gen * np.sqrt(t_min), k_imp * np.sqrt(t_min), k_hi * np.sqrt(t_min), k_exp * np.sqrt(t_min)
+I_REC_KA = (1.2 if t_min >= 1 else 1.16) * np.sqrt((9.7 * 3.14 * (GEN_D ** 2 / 4.0) * total_t) / (0.24 * (0.0001 * C_REC * 0.02))) / 1000.0
+if is_zinc:
+    I_REC_KA *= 1.2
+I_REC = I_REC_KA * 1000.0
+
+if factory:
+    I_MIN, I_MAX = int(round(0.5 * I_REC / 100) * 100), int(round(1.8 * I_REC / 100) * 100)
+    T_MIN, T_MAX = 3, max(24, int(np.ceil(2.5 * C_REC)))
+    F_MIN, F_MAX = int(round(0.5 * F_REC / 10) * 10), int(round(2.0 * F_REC / 10) * 10)
+    I_DEF, T_DEF, F_DEF = int(min(max(round(I_REC / 100) * 100, I_MIN), I_MAX)), int(min(max(round(C_REC), T_MIN), T_MAX)), int(min(max(round(F_REC), F_MIN), F_MAX))
+    I_STEP, F_STEP = 100, 1
+else:
+    I_MIN, I_MAX, T_MIN, T_MAX, F_MIN, F_MAX = 5000, 13000, 3, 24, 100, 450
+    I_DEF, T_DEF, F_DEF, I_STEP, F_STEP = 9500, 16, 250, 100, 10
+
+with st.sidebar:
+    st.header("3. Operating point")
+    active_current = st.slider("Weld current (A)", I_MIN, I_MAX, I_DEF, step=I_STEP)
+    active_time = st.slider("Weld time (cycles)", T_MIN, T_MAX, T_DEF, step=1)
+    active_force = st.slider("Electrode force (kg)", F_MIN, F_MAX, F_DEF, step=F_STEP)
+    if factory:
+        quality = st.radio("Required nugget level", ["General spot", "Important spot"], horizontal=True)
+
+    st.header("4. Schedule (2D simulation)")
+    freq = st.radio("Mains frequency", [50, 60], horizontal=True)
+    n_pulses = st.slider("Number of pulses", 1, 3, 1)
+    cool_cyc = st.slider("Cool time between pulses (cycles)", 0, 10, 4) if n_pulses > 1 else 0
+    hold_cyc = st.slider("Hold time after weld (cycles)", 0, 10, 4)
+    with st.expander("Advanced thermal model"):
+        heat_scale = st.slider("Heat-input factor", 0.3, 1.5, 0.75, step=0.05, help="Scales all Joule heating in the 2D model.")
+        contact_scale = st.slider("Contact resistance factor", 0.2, 3.0, 1.0, step=0.1)
+        calibrate = st.checkbox("Calibrate 2D model to the lobe equation at the operating point", value=factory,
+                                help="Adjusts the heat-input factor automatically so the 2D nugget equals the lobe-equation nugget at this operating point.")
+
+# --------------------------------------------------------------------------------------
+# nugget / expulsion functions used by every tab
+# --------------------------------------------------------------------------------------
 k_approx = k_base * k_mod_weighted * res_weighted * (0.82 if is_zinc else 1.0)
 tip_eff = (6.0 / d_tip) ** 2
-target_min = 4.0 * np.sqrt(t_min)
+if factory:
+    target_min = GEN_D if quality == "General spot" else IMP_D
+else:
+    target_min = 4.0 * np.sqrt(t_min)
+    GEN_D = IMP_D = target_min
+    HI_D = 1e9
 
 def nugget(I, T, F):
+    if factory:
+        I_eff = np.asarray(I, dtype=float) / (1.2 if is_zinc else 1.0)   # zinc sheet needs +20 % current for the same nugget
+        return np.sqrt((4 * 1.2 * I_eff ** 2 * 0.241 * 0.0001 * (0.02 * np.asarray(T, dtype=float))) /
+                       ((np.asarray(F, dtype=float) / F_REC) * 9.7 * total_t * 3.14))
     return k_approx * ((I * tip_eff) / 10000.0) ** 2 * (T / 10.0) * (300.0 / F) ** 0.25 * 5.5
 
 def expulsion(F):
+    if factory:
+        return EXP_D + 0.0 * np.asarray(F, dtype=float)
     return (5.5 * np.sqrt(t_min)) * (F / 300.0) ** 0.1 * (d_tip / 6.0) ** 0.2
 
-I_MIN, I_MAX, T_MIN, T_MAX, F_MIN, F_MAX = 5000, 13000, 3, 24, 100, 450
 currents = np.linspace(I_MIN, I_MAX, 50)
 times = np.linspace(T_MIN, T_MAX, 40)
 forces = np.linspace(F_MIN, F_MAX, 40)
 
 tab_lobe, tab_sim, tab_report, tab_notes = st.tabs(["🧊 3D Lobe + Slice Plane", "🔥 2D Process Simulation", "📊 Strength & Metallurgy", "ℹ️ Model notes"])
 
+ZONE_COLORS = ["#cfd8dc", "#9ccc65", "#42a5f5", "#f48fb1", "#ff6d00"]
+ZONE_SCALE = []
+for _i, _c in enumerate(ZONE_COLORS):
+    ZONE_SCALE += [[_i / 5.0, _c], [(_i + 1) / 5.0, _c]]
+
+def zone_of(D, EX):
+    """0 too small, 1 general-spot, 2 important-spot, 3 large (no expulsion), 4 expulsion"""
+    return np.select([D > EX, D >= HI_D, D >= IMP_D, D >= GEN_D], [4, 3, 2, 1], 0)
+
 # ======================================================================================
 # TAB 1 : 3D LOBE WITH ADJUSTABLE PLANE  ->  LIVE 2D LOBE
 # ======================================================================================
 with tab_lobe:
+    if factory:
+        d_target = float(nugget(I_REC, C_REC, F_REC))
+        st.markdown("#### Recommended setting (factory equations)")
+        r1, r2, r3, r4, r5 = st.columns(5)
+        r1.metric("Weld force", f"{F_REC:.0f} kg")
+        r2.metric("Weld time", f"{C_REC:.1f} cycles")
+        r3.metric("Weld current", f"{I_REC_KA:.2f} kA", "+20 % zinc" if is_zinc else None, delta_color="off")
+        r4.metric("Target nugget", f"{d_target:.2f} mm")
+        r5.metric("General / Important", f"{GEN_D:.1f} / {IMP_D:.1f} mm")
+
     c_ctrl, _ = st.columns([2, 1])
     with c_ctrl:
         plane = st.radio("Slice plane (fixed variable)", ["Force (kg)", "Time (cycles)", "Current (A)"], horizontal=True,
                          help="The plane is drawn inside the 3D lobe. The 2D weld lobe on the right is exactly the cut along this plane.")
         if plane == "Force (kg)":
-            pos = st.slider("Plane position: Force (kg)", F_MIN, F_MAX, int(active_force), step=5)
+            pos = st.slider("Plane position: Force (kg)", F_MIN, F_MAX, int(active_force), step=F_STEP)
         elif plane == "Time (cycles)":
             pos = st.slider("Plane position: Time (cycles)", T_MIN, T_MAX, int(active_time), step=1)
         else:
-            pos = st.slider("Plane position: Current (A)", I_MIN, I_MAX, int(active_current), step=100)
+            pos = st.slider("Plane position: Current (A)", I_MIN, I_MAX, int(active_current), step=I_STEP)
 
-    # --- 3D volumetric lobe: region where  target_min <= nugget <= expulsion
+    # --- 3D volumetric lobe: region where  target_min <= nugget <= expulsion  (dark, saturated colours on white)
     ci = np.linspace(I_MIN, I_MAX, 36); ti = np.linspace(T_MIN, T_MAX, 28); fi = np.linspace(F_MIN, F_MAX, 28)
     I3, T3, F3 = np.meshgrid(ci, ti, fi, indexing="ij")
     D3 = nugget(I3, T3, F3)
+    NOCAP = dict(x=dict(show=False), y=dict(show=False), z=dict(show=False))
     fig3 = go.Figure()
     fig3.add_trace(go.Isosurface(x=I3.flatten(), y=T3.flatten(), z=F3.flatten(), value=(D3 - target_min).flatten(),
-                                 isomin=0, isomax=0, surface_count=1, colorscale=[[0, "#00e5ff"], [1, "#00e5ff"]], opacity=0.35,
-                                 showscale=False, name="Min target (lower lobe limit)", showlegend=True,
-                                 caps=dict(x=dict(show=False), y=dict(show=False), z=dict(show=False))))
+                                 isomin=0, isomax=0, surface_count=1, colorscale=[[0, "#0d47a1"], [1, "#0d47a1"]], opacity=0.55,
+                                 showscale=False, name="Minimum nugget (lower lobe limit)", showlegend=True, caps=NOCAP))
     fig3.add_trace(go.Isosurface(x=I3.flatten(), y=T3.flatten(), z=F3.flatten(), value=(D3 - expulsion(F3)).flatten(),
-                                 isomin=0, isomax=0, surface_count=1, colorscale=[[0, "#ff3d3d"], [1, "#ff3d3d"]], opacity=0.35,
-                                 showscale=False, name="Expulsion (upper lobe limit)", showlegend=True,
-                                 caps=dict(x=dict(show=False), y=dict(show=False), z=dict(show=False))))
+                                 isomin=0, isomax=0, surface_count=1, colorscale=[[0, "#bf360c"], [1, "#bf360c"]], opacity=0.55,
+                                 showscale=False, name="Expulsion (upper lobe limit)", showlegend=True, caps=NOCAP))
     # the adjustable plane
     if plane == "Force (kg)":
         gx, gy = np.meshgrid([I_MIN, I_MAX], [T_MIN, T_MAX]); gz = np.full_like(gx, pos, dtype=float)
@@ -314,17 +402,18 @@ with tab_lobe:
         gx, gz = np.meshgrid([I_MIN, I_MAX], [F_MIN, F_MAX]); gy = np.full_like(gx, pos, dtype=float)
     else:
         gy, gz = np.meshgrid([T_MIN, T_MAX], [F_MIN, F_MAX]); gx = np.full_like(gy, pos, dtype=float)
-    fig3.add_trace(go.Surface(x=gx, y=gy, z=gz, showscale=False, opacity=0.45, colorscale=[[0, "#ffd54f"], [1, "#ffd54f"]], name="Slice plane", showlegend=True))
+    fig3.add_trace(go.Surface(x=gx, y=gy, z=gz, showscale=False, opacity=0.40, colorscale=[[0, "#ffa000"], [1, "#ffa000"]], name="Slice plane", showlegend=True))
     fig3.add_trace(go.Scatter3d(x=[active_current], y=[active_time], z=[active_force], mode="markers",
-                                marker=dict(size=6, color="white", symbol="diamond"), name="Operating point"))
-    fig3.update_layout(scene=dict(xaxis_title="Current (A)", yaxis_title="Time (cycles)", zaxis_title="Force (kg)",
-                                  xaxis=dict(range=[I_MIN, I_MAX]), yaxis=dict(range=[T_MIN, T_MAX]), zaxis=dict(range=[F_MIN, F_MAX])),
-                       margin=dict(l=0, r=0, b=0, t=30), height=620, template="plotly_dark",
-                       legend=dict(orientation="h", y=1.02), title="3D weld lobe (between the cyan and red surfaces = acceptable nugget)")
+                                marker=dict(size=7, color="black", symbol="diamond"), name="Operating point"))
+    AX = dict(backgroundcolor="#eceff1", gridcolor="#90a4ae", showbackground=True, zerolinecolor="#546e7a", linecolor="#37474f", tickfont=dict(color="#263238"))
+    fig3.update_layout(scene=dict(xaxis=dict(title="Current (A)", range=[I_MIN, I_MAX], **AX), yaxis=dict(title="Time (cycles)", range=[T_MIN, T_MAX], **AX),
+                                  zaxis=dict(title="Force (kg)", range=[F_MIN, F_MAX], **AX)),
+                       margin=dict(l=0, r=0, b=0, t=30), height=620, template="plotly_white", paper_bgcolor="white",
+                       legend=dict(orientation="h", y=1.04), title="3D weld lobe (volume between the blue and red surfaces = acceptable nugget)")
 
     # --- 2D weld lobe cut along the plane
     if plane == "Force (kg)":
-        X, Y = np.meshgrid(currents, times); D = nugget(X, Y, pos); EX = np.full_like(D, expulsion(pos))
+        X, Y = np.meshgrid(currents, times); D = nugget(X, Y, pos); EX = expulsion(D * 0 + pos)
         xlab, ylab = "Current (A)", "Weld time (cycles)"; xs, ys = currents, times; op = (active_current, active_time)
         ttl = f"2D weld lobe at Force = {pos} kg"
     elif plane == "Time (cycles)":
@@ -335,18 +424,16 @@ with tab_lobe:
         X, Y = np.meshgrid(times, forces); D = nugget(pos, X, Y); EX = expulsion(Y)
         xlab, ylab = "Weld time (cycles)", "Force (kg)"; xs, ys = times, forces; op = (active_time, active_force)
         ttl = f"2D weld lobe at Current = {pos} A"
-    zone = np.where(D < target_min, 0, np.where(D <= EX, 1, 2))
     fig2 = go.Figure()
-    fig2.add_trace(go.Heatmap(x=xs, y=ys, z=zone, zmin=0, zmax=2, showscale=False, opacity=0.55, hoverinfo="skip",
-                              colorscale=[[0, "#455a64"], [0.33, "#455a64"], [0.34, "#2e7d32"], [0.66, "#2e7d32"], [0.67, "#c62828"], [1, "#c62828"]]))
-    fig2.add_trace(go.Contour(x=xs, y=ys, z=D, colorscale="Plasma", opacity=0.55, contours=dict(showlabels=True, labelfont=dict(size=10, color="white")),
-                              colorbar=dict(title="Dia (mm)"), name="Nugget"))
+    fig2.add_trace(go.Heatmap(x=xs, y=ys, z=zone_of(D, EX), zmin=0, zmax=4.999, showscale=False, hoverinfo="skip", colorscale=ZONE_SCALE))
+    fig2.add_trace(go.Contour(x=xs, y=ys, z=D, showscale=False, contours_coloring="none", contours=dict(showlabels=True, labelfont=dict(size=10, color="#263238")),
+                              line=dict(color="rgba(38,50,56,0.55)", width=1), name="Nugget Ø (mm)", hovertemplate="Ø %{z:.2f} mm<extra></extra>"))
     fig2.add_trace(go.Contour(x=xs, y=ys, z=D, showscale=False, contours_coloring="none", contours=dict(start=target_min, end=target_min, size=1),
-                              line=dict(color="cyan", width=4), name="Min target", showlegend=True))
+                              line=dict(color="#0d47a1", width=4), name="Minimum nugget", showlegend=True))
     fig2.add_trace(go.Contour(x=xs, y=ys, z=D - EX, showscale=False, contours_coloring="none", contours=dict(start=0, end=0, size=1),
-                              line=dict(color="red", width=4, dash="dash"), name="Expulsion limit", showlegend=True))
-    fig2.add_trace(go.Scatter(x=[op[0]], y=[op[1]], mode="markers", marker=dict(color="white", size=13, symbol="cross", line=dict(color="black", width=1)), name="Operating point"))
-    fig2.update_layout(title=ttl + "  (green = weld window)", xaxis_title=xlab, yaxis_title=ylab, template="plotly_dark", height=620,
+                              line=dict(color="#b71c1c", width=4, dash="dash"), name="Expulsion limit", showlegend=True))
+    fig2.add_trace(go.Scatter(x=[op[0]], y=[op[1]], mode="markers", marker=dict(color="black", size=14, symbol="cross", line=dict(color="white", width=1)), name="Operating point"))
+    fig2.update_layout(title=ttl, xaxis_title=xlab, yaxis_title=ylab, template="plotly_white", height=620,
                        margin=dict(l=40, r=20, b=40, t=50), legend=dict(orientation="h", y=-0.15))
 
     col3d, col2d = st.columns([1.15, 1])
@@ -354,9 +441,37 @@ with tab_lobe:
         st.plotly_chart(fig3, use_container_width=True)
     with col2d:
         st.plotly_chart(fig2, use_container_width=True)
-    in_window = target_min <= nugget(active_current, active_time, active_force) <= expulsion(active_force)
-    st.caption("Tip: rotate the 3D lobe with the mouse; the yellow plane is the cut shown at right. Move the plane with the slider above. "
-               + ("✅ The operating point is inside the weld window." if in_window else "⚠️ The operating point is outside the weld window."))
+    if factory:
+        st.markdown("<span style='background:#cfd8dc;padding:2px 8px'>below general</span> "
+                    "<span style='background:#9ccc65;padding:2px 8px'>General spot</span> "
+                    "<span style='background:#42a5f5;padding:2px 8px'>Important spot</span> "
+                    "<span style='background:#f48fb1;padding:2px 8px'>large nugget</span> "
+                    "<span style='background:#ff6d00;padding:2px 8px;color:white'>expulsion</span>", unsafe_allow_html=True)
+    d_op = float(nugget(active_current, active_time, active_force))
+    in_window = target_min <= d_op <= float(expulsion(active_force))
+    st.caption(f"Operating point nugget Ø {d_op:.2f} mm. " + ("✅ Inside the weld window." if in_window else "⚠️ Outside the weld window.") +
+               "  Rotate the 3D lobe with the mouse; the amber plane is the cut shown at right.")
+
+    # ---- Excel-style lobe table (current x cycles) at the operating force
+    st.markdown(f"#### Lobe table — nugget Ø (mm) at force = {active_force} kg")
+    cur_cols = np.linspace(I_MIN, I_MAX, 15)
+    cyc_rows = list(range(T_MAX, T_MIN - 1, -1))
+    Dt = nugget(cur_cols[None, :], np.array(cyc_rows)[:, None], active_force)
+    df = pd.DataFrame(Dt, index=[f"{c} cyc" for c in cyc_rows], columns=[f"{c / 1000:.1f} kA" for c in cur_cols])
+    Zt = zone_of(Dt, float(expulsion(active_force)))
+    def _paint(_):
+        return pd.DataFrame([[f"background-color:{ZONE_COLORS[int(z)]};color:{'white' if z == 4 else '#212121'}" for z in row] for row in Zt], index=df.index, columns=df.columns)
+    st.dataframe(df.style.apply(_paint, axis=None).format("{:.1f}"), use_container_width=True, height=min(740, 38 + 35 * len(cyc_rows)))
+
+    # ---- nugget growth with weld time
+    cyc = np.linspace(0.2, max(12.0, T_MAX / 2.0), 60)
+    figG = go.Figure()
+    figG.add_trace(go.Scatter(x=cyc, y=nugget(active_current, cyc, active_force), mode="lines", line=dict(color="#0d47a1", width=3), name="Nugget Ø"))
+    for val, nm, col in [(GEN_D, "General", "#7cb342"), (IMP_D, "Important", "#1e88e5"), (float(expulsion(active_force)), "Expulsion", "#d84315")]:
+        figG.add_hline(y=val, line=dict(color=col, dash="dash"), annotation_text=nm)
+    figG.update_layout(title=f"Nugget growth at {active_current} A, {active_force} kg", xaxis_title="Weld time (cycles)", yaxis_title="Ø (mm)",
+                       template="plotly_white", height=320, margin=dict(l=40, r=20, b=40, t=50))
+    st.plotly_chart(figG, use_container_width=True)
 
 # ======================================================================================
 # TAB 2 : 2D AXISYMMETRIC PROCESS SIMULATION
@@ -502,6 +617,14 @@ with tab_report:
 # ======================================================================================
 with tab_notes:
     st.markdown("""
+**Factory equations (default basis).** Taken from the factory Excel sheet — mild steel, 2 panels, Ø4 mm tip:
+- Recommended force: F = (0.3428·t² + 1.327·t + 0.5865)·1000 / 9.81 kg, with t = thinnest sheet (mm)
+- Recommended weld time: 10 × t_min cycles
+- Recommended current: I = f·√[ 9.7·3.14·(d²/4)·t_total / (0.24·(0.0001·cycles·0.02)) ] / 1000 kA, f = 1.2 if t_min ≥ 1 mm else 1.16, d = general-spot nugget
+- Nugget diameter: d = √[ 4·1.2·I²·0.241·0.0001·(0.02·cycles) / ((F/F_rec)·9.7·t_total·3.14) ]
+- Zinc-coated sheet: +20 % current (applied as I/1.2 inside the nugget equation).
+- Nugget-size limits (general, important, upper important band, expulsion) are inferred from the colour boundaries of the Excel lobe table and are editable in the sidebar.
+
 **3D lobe + slice plane.** The lobe is the volume in (current, time, force) space where the predicted nugget is at least the minimum target (4·√t_min) and below the expulsion limit. The yellow plane cuts this volume; the 2D weld lobe on the right is the same cut, shown with the green weld window, the cyan minimum-nugget line and the red dashed expulsion line.
 
 **2D process simulation.** An axisymmetric (r–z) transient finite-difference model with: Joule heating in the sheets and copper electrodes, temperature-dependent resistivity, conductivity and heat capacity of steel, latent heat of fusion, contact resistance at electrode–sheet and sheet–sheet interfaces (falling with temperature and force), water-cooled electrode ends, multi-pulse schedules and hold time. The current path widens as the nugget grows.
