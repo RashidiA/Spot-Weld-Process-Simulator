@@ -232,7 +232,7 @@ materials_db = {
 # SIDEBAR INPUTS
 # ======================================================================================
 with st.sidebar:
-    st.caption("Weld_Lobe v2.4")
+    st.caption("Weld_Lobe v2.5")
     basis = st.radio("Calculation basis", ["Factory Excel model (mild steel, 2-ply, Ø4 mm tip)", "Generic model (any material, 2–3 ply)"],
                      help="Factory model = the equations tuned from factory experiments (mild steel, 2 panels, Ø4 mm tip). Generic model = the earlier formula for other materials.")
     factory = basis.startswith("Factory")
@@ -429,8 +429,8 @@ with tab_lobe:
         NOCAP = dict(x=dict(show=False), y=dict(show=False), z=dict(show=False))
         fig3 = go.Figure()
         fig3.add_trace(go.Isosurface(x=I3.flatten(), y=T3.flatten(), z=F3.flatten(), value=V3.flatten(),
-                                     isomin=c_lo + 0.01 * (c_hi - c_lo), isomax=c_hi - 0.01 * (c_hi - c_lo), surface_count=9,
-                                     cmin=c_lo, cmax=c_hi, colorscale=vol_scale, opacity=0.35, caps=NOCAP,
+                                     isomin=c_lo + 0.01 * (c_hi - c_lo), isomax=c_hi - 0.01 * (c_hi - c_lo), surface_count=40,
+                                     cmin=c_lo, cmax=c_hi, colorscale=vol_scale, opacity=0.16, caps=NOCAP,
                                      colorbar=dict(title="Nugget Ø (mm)", len=0.6), name="Acceptable weld lobe"))
         # the adjustable plane
         if plane == "Force (kg)":
