@@ -386,7 +386,7 @@ def zone_index(D, EX):
             pos = st.slider("Plane position: Current (A)", I_MIN, I_MAX, int(active_current), step=I_STEP)
 
     # --- 3D volumetric lobe: the whole acceptable volume (target_min <= nugget <= expulsion) is filled with colour
-    ci = np.linspace(I_MIN, I_MAX, 40); ti = np.linspace(T_MIN, T_MAX, 30); fi = np.linspace(F_MIN, F_MAX, 30)
+    ci = np.linspace(I_MIN, I_MAX, 30); ti = np.linspace(T_MIN, T_MAX, 22); fi = np.linspace(F_MIN, F_MAX, 22)
     I3, T3, F3 = np.meshgrid(ci, ti, fi, indexing="ij")
     D3 = nugget(I3, T3, F3); EX3 = expulsion(F3) + 0.0 * D3
     inside = (D3 >= target_min) & (D3 <= EX3)
@@ -402,9 +402,15 @@ def zone_index(D, EX):
         vol_scale = [[0, "#2e7d32"], [0.5, "#9ccc65"], [1, "#f9a825"]]
     NOCAP = dict(x=dict(show=False), y=dict(show=False), z=dict(show=False))
     fig3 = go.Figure()
-    fig3.add_trace(go.Volume(x=I3.flatten(), y=T3.flatten(), z=F3.flatten(), value=V3.flatten(), isomin=c_lo, isomax=c_hi, cmin=c_lo, cmax=c_hi,
-                             opacity=0.22, surface_count=28, colorscale=vol_scale, caps=NOCAP, name="Acceptable weld lobe", showlegend=True,
-                             colorbar=dict(title="Nugget Ø (mm)", len=0.6)))
+    try:
+        fig3.add_trace(go.Volume(x=I3.flatten(), y=T3.flatten(), z=F3.flatten(), value=V3.flatten(), isomin=c_lo, isomax=c_hi, cmin=c_lo, cmax=c_hi,
+                                 opacity=0.22, surface_count=18, colorscale=vol_scale, caps=NOCAP, name="Acceptable weld lobe",
+                                 colorbar=dict(title="Nugget Ø (mm)", len=0.6)))
+    except Exception:   # fallback: two boundary surfaces
+        fig3.add_trace(go.Isosurface(x=I3.flatten(), y=T3.flatten(), z=F3.flatten(), value=(D3 - target_min).flatten(), isomin=0, isomax=0, surface_count=1,
+                                     colorscale=[[0, "#0d47a1"], [1, "#0d47a1"]], opacity=0.55, showscale=False, caps=NOCAP, name="Minimum nugget"))
+        fig3.add_trace(go.Isosurface(x=I3.flatten(), y=T3.flatten(), z=F3.flatten(), value=(D3 - EX3).flatten(), isomin=0, isomax=0, surface_count=1,
+                                     colorscale=[[0, "#bf360c"], [1, "#bf360c"]], opacity=0.55, showscale=False, caps=NOCAP, name="Expulsion"))
     # the adjustable plane
     if plane == "Force (kg)":
         gx, gy = np.meshgrid([I_MIN, I_MAX], [T_MIN, T_MAX]); gz = np.full_like(gx, pos, dtype=float)
@@ -422,7 +428,8 @@ def zone_index(D, EX):
                        legend=dict(orientation="h", y=1.04), title="3D weld lobe (coloured volume = acceptable nugget, coloured by nugget size)")
 
     # --- 2D weld lobe cut along the plane (fine grid -> smooth zone edges) + matching Excel-style table
-    NG = 260
+    NG = 180
+    NC = 70
     if plane == "Force (kg)":
         xs, ys = np.linspace(I_MIN, I_MAX, NG), np.linspace(T_MIN, T_MAX, NG)
         fD = lambda X, Y: nugget(X, Y, pos); fE = lambda X, Y: expulsion(0.0 * X + pos)
@@ -445,13 +452,15 @@ def zone_index(D, EX):
         tx = np.unique(np.round(np.linspace(T_MIN, T_MAX, 16))); ty = np.unique(np.round(np.linspace(F_MIN, F_MAX, 16)))[::-1]
         xfmt, yfmt = (lambda v: f"{int(v)} cyc"), (lambda v: f"{int(v)} kg")
     X, Y = np.meshgrid(xs, ys); D = fD(X, Y); EX = fE(X, Y) + 0.0 * D
+    xc, yc = np.linspace(xs[0], xs[-1], NC), np.linspace(ys[0], ys[-1], NC)
+    Xc, Yc = np.meshgrid(xc, yc); Dc = fD(Xc, Yc); EXc = fE(Xc, Yc) + 0.0 * Dc
     fig2 = go.Figure()
     fig2.add_trace(go.Heatmap(x=xs, y=ys, z=zone_index(D, EX), zmin=0, zmax=N_ZONE - 0.001, showscale=False, hoverinfo="skip", colorscale=ZONE_SCALE))
-    fig2.add_trace(go.Contour(x=xs, y=ys, z=D, showscale=False, contours_coloring="none", contours=dict(showlabels=True, labelfont=dict(size=10, color="#263238")),
+    fig2.add_trace(go.Contour(x=xc, y=yc, z=Dc, showscale=False, contours_coloring="none", contours=dict(showlabels=True, labelfont=dict(size=10, color="#263238")),
                               line=dict(color="rgba(38,50,56,0.55)", width=1), name="Nugget Ø (mm)", hovertemplate="Ø %{z:.2f} mm<extra></extra>"))
-    fig2.add_trace(go.Contour(x=xs, y=ys, z=D, showscale=False, contours_coloring="none", contours=dict(start=target_min, end=target_min, size=1),
+    fig2.add_trace(go.Contour(x=xc, y=yc, z=Dc, showscale=False, contours_coloring="none", contours=dict(start=target_min, end=target_min, size=1),
                               line=dict(color="#0d47a1", width=4), name="Minimum nugget", showlegend=True))
-    fig2.add_trace(go.Contour(x=xs, y=ys, z=D - EX, showscale=False, contours_coloring="none", contours=dict(start=0, end=0, size=1),
+    fig2.add_trace(go.Contour(x=xc, y=yc, z=Dc - EXc, showscale=False, contours_coloring="none", contours=dict(start=0, end=0, size=1),
                               line=dict(color="#b71c1c", width=4, dash="dash"), name="Expulsion limit", showlegend=True))
     fig2.add_trace(go.Scatter(x=[op[0]], y=[op[1]], mode="markers", marker=dict(color="black", size=14, symbol="cross", line=dict(color="white", width=1)), name="Operating point"))
     fig2.update_layout(title=ttl, xaxis_title=xlab, yaxis_title=ylab, template="plotly_white", height=620,
@@ -509,107 +518,116 @@ base_args = (sim_layers, bool(is_zinc), float(d_tip), float(active_force), float
              int(n_pulses), int(cool_cyc), int(hold_cyc), float(freq))
 
 with tab_sim:
-    hs_used = heat_scale
-    with st.spinner("Solving transient heat-conduction / Joule-heating model..."):
-        if calibrate:
-            goal = float(nugget(active_current, active_time, active_force))
-            lo, hi = 0.2, 2.5
-            for _ in range(7):
-                mid = 0.5 * (lo + hi)
-                d_mid = run_sim(*base_args, round(mid, 4), float(contact_scale))["final_dia"]
-                if d_mid < goal: lo = mid
-                else: hi = mid
-            hs_used = round(0.5 * (lo + hi), 4)
-        res = run_sim(*base_args, float(hs_used), float(contact_scale))
-
-    rec = res["rec"]; dia = res["final_dia"]; E = float(expulsion(active_force))
-    pen = res["max_pen"]
-    if dia < 0.5:
-        verdict = "❌ No nugget formed (cold weld)"
-    elif dia < target_min:
-        verdict = "❌ Undersized nugget (below minimum)"
-    elif dia > E or res["peak"] > 2300 or pen > 90:
-        verdict = "🔥 Expulsion / overheating risk"
+    run_it = st.toggle("▶ Run 2D simulation", value=False, key="run2d",
+                       help="Switch on to solve the 2D thermal model (a few seconds). It is off by default so the lobe tab stays fast.")
+    dia = 0.0
+    if not run_it:
+        st.info("Switch on **▶ Run 2D simulation** to solve nugget growth for the current settings (sidebar). Results are cached, so moving the lobe plane is not slowed down.")
     else:
-        verdict = "✅ Good weld (inside weld window)"
-    m1, m2, m3, m4, m5 = st.columns(5)
-    m1.metric("Nugget diameter (2D sim)", f"{dia:.2f} mm", f"lobe model: {nugget(active_current, active_time, active_force):.2f} mm", delta_color="off")
-    m2.metric("Required minimum", f"{target_min:.2f} mm")
-    m3.metric("Penetration", f"{pen:.0f} %")
-    m4.metric("Peak temperature", f"{res['peak']:.0f} °C")
-    m5.metric("HAZ radius (727 °C)", f"{res['haz_r']:.1f} mm")
-    st.info(f"**2D simulation result:** {verdict}" + (f"   •   heat-input factor auto-calibrated to {hs_used:.2f}" if calibrate else ""))
+        hs_used = heat_scale
+        with st.spinner("Solving transient heat-conduction / Joule-heating model..."):
+            if calibrate:
+                goal = float(nugget(active_current, active_time, active_force))
+                lo, hi = 0.2, 2.5
+                for _ in range(7):
+                    mid = 0.5 * (lo + hi)
+                    d_mid = run_sim(*base_args, round(mid, 4), float(contact_scale))["final_dia"]
+                    if d_mid < goal: lo = mid
+                    else: hi = mid
+                hs_used = round(0.5 * (lo + hi), 4)
+            res = run_sim(*base_args, float(hs_used), float(contact_scale))
 
-    # ---- animated cross-section
-    top, bot, n_el, n_z, n_r = res["top"], res["bot"], res["n_el"], res["n_z"], res["n_r"]
-    DXmm = 0.2
-    z0 = max(0, top - 10); z1 = min(n_z, bot + 10)
-    cols = 40
-    xs_half = (np.arange(cols) + 0.5) * DXmm
-    xs = np.concatenate([-xs_half[::-1], xs_half])
-    ys = (np.arange(z0, z1) - top) * DXmm + DXmm / 2
+        rec = res["rec"]; dia = res["final_dia"]; E = float(expulsion(active_force))
+        pen = res["max_pen"]
+        if dia < 0.5:
+            verdict = "❌ No nugget formed (cold weld)"
+        elif dia < target_min:
+            verdict = "❌ Undersized nugget (below minimum)"
+        elif dia > E or res["peak"] > 2300 or pen > 90:
+            verdict = "🔥 Expulsion / overheating risk"
+        else:
+            verdict = "✅ Good weld (inside weld window)"
+        m1, m2, m3, m4, m5 = st.columns(5)
+        m1.metric("Nugget diameter (2D sim)", f"{dia:.2f} mm", f"lobe model: {nugget(active_current, active_time, active_force):.2f} mm", delta_color="off")
+        m2.metric("Required minimum", f"{target_min:.2f} mm")
+        m3.metric("Penetration", f"{pen:.0f} %")
+        m4.metric("Peak temperature", f"{res['peak']:.0f} °C")
+        m5.metric("HAZ radius (727 °C)", f"{res['haz_r']:.1f} mm")
+        st.info(f"**2D simulation result:** {verdict}" + (f"   •   heat-input factor auto-calibrated to {hs_used:.2f}" if calibrate else ""))
 
-    def field(Tm):
-        h = Tm[z0:z1, :cols]
-        return np.round(np.concatenate([h[:, ::-1], h], axis=1)).astype(int)
+        # ---- animated cross-section
+        top, bot, n_el, n_z, n_r = res["top"], res["bot"], res["n_el"], res["n_z"], res["n_r"]
+        DXmm = 0.2
+        z0 = max(0, top - 10); z1 = min(n_z, bot + 10)
+        cols = 40
+        xs_half = (np.arange(cols) + 0.5) * DXmm
+        xs = np.concatenate([-xs_half[::-1], xs_half])
+        ys = (np.arange(z0, z1) - top) * DXmm + DXmm / 2
 
-    snaps = res["snaps"]; times_s = res["snap_t"]
-    frames = []
-    for i in range(len(snaps)):
-        Z = field(snaps[i])
-        frames.append(go.Frame(name=str(i), data=[
-            go.Heatmap(x=xs, y=ys, z=Z, zmin=25, zmax=1600, colorscale="Inferno", zsmooth="best", colorbar=dict(title="°C")),
-            go.Contour(x=xs, y=ys, z=Z, contours=dict(start=727, end=1500, size=773, coloring="none"), showscale=False,
-                       line=dict(color="white", width=2), hoverinfo="skip")]))
-    Z0 = field(snaps[-1])
-    figA = go.Figure(data=[
-        go.Heatmap(x=xs, y=ys, z=Z0, zmin=25, zmax=1600, colorscale="Inferno", zsmooth="best", colorbar=dict(title="°C")),
-        go.Contour(x=xs, y=ys, z=Z0, contours=dict(start=727, end=1500, size=773, coloring="none"), showscale=False,
-                   line=dict(color="white", width=2), hoverinfo="skip")], frames=frames)
-    shapes = []
-    zt = 0.0
-    for zi in [top] + [z for z in res["iface"] if top < z < bot] + [bot]:
-        yy = (zi - top) * DXmm
-        shapes.append(dict(type="line", x0=xs[0], x1=xs[-1], y0=yy, y1=yy, line=dict(color="rgba(200,200,200,0.5)", width=1, dash="dot")))
-    steps = [dict(method="animate", label=f"{times_s[i]*1000:.0f}", args=[[str(i)], dict(mode="immediate", frame=dict(duration=0, redraw=True), transition=dict(duration=0))]) for i in range(len(snaps))]
-    figA.update_layout(
-        title="Cross-section (axisymmetric): temperature field   •   white lines = HAZ (727 °C) and molten nugget (1500 °C)",
-        template="plotly_dark", height=520, margin=dict(l=40, r=20, b=40, t=60),
-        xaxis=dict(title="Radius (mm)", scaleanchor="y", scaleratio=1), yaxis=dict(title="Depth (mm)", autorange="reversed"), shapes=shapes,
-        updatemenus=[dict(type="buttons", direction="left", x=0.0, y=-0.12, buttons=[
-            dict(label="▶ Play", method="animate", args=[None, dict(frame=dict(duration=140, redraw=True), fromcurrent=True, transition=dict(duration=0))]),
-            dict(label="⏸ Pause", method="animate", args=[[None], dict(mode="immediate", frame=dict(duration=0, redraw=False))])])],
-        sliders=[dict(active=len(snaps) - 1, x=0.15, len=0.85, y=-0.05, currentvalue=dict(prefix="Time (ms): "), steps=steps)])
+        def field(Tm):
+            h = Tm[z0:z1, :cols]
+            return np.round(np.concatenate([h[:, ::-1], h], axis=1)).astype(int)
 
-    # ---- curves
-    tms = rec["t"] * 1000
-    figC = go.Figure()
-    figC.add_trace(go.Scatter(x=tms, y=rec["dia"], name="Nugget dia (mm)", line=dict(color="#ffb300", width=3)))
-    figC.add_hline(y=target_min, line=dict(color="cyan", dash="dash"), annotation_text="min target")
-    figC.add_hline(y=E, line=dict(color="red", dash="dash"), annotation_text="expulsion limit")
-    figC.update_layout(title="Nugget growth", xaxis_title="Time (ms)", yaxis_title="Diameter (mm)", template="plotly_dark", height=330, margin=dict(l=40, r=20, b=40, t=50))
-    figR = go.Figure()
-    mask = rec["I"] > 0
-    figR.add_trace(go.Scatter(x=tms[mask], y=rec["rdyn"][mask], name="Dynamic resistance", line=dict(color="#69f0ae", width=3), mode="lines"))
-    figR.update_layout(title="Dynamic resistance (µΩ)", xaxis_title="Time (ms)", yaxis_title="R (µΩ)", template="plotly_dark", height=330, margin=dict(l=40, r=20, b=40, t=50))
-    figT = go.Figure()
-    figT.add_trace(go.Scatter(x=tms, y=rec["tmax"], name="Peak temperature in sheets", line=dict(color="#ff7043", width=3)))
-    figT.add_hline(y=1500, line=dict(color="white", dash="dot"), annotation_text="melting")
-    figT.update_layout(title="Peak temperature (°C)", xaxis_title="Time (ms)", yaxis_title="°C", template="plotly_dark", height=330, margin=dict(l=40, r=20, b=40, t=50))
+        snaps = res["snaps"]; times_s = res["snap_t"]
+        frames = []
+        for i in range(len(snaps)):
+            Z = field(snaps[i])
+            frames.append(go.Frame(name=str(i), data=[
+                go.Heatmap(x=xs, y=ys, z=Z, zmin=25, zmax=1600, colorscale="Inferno", zsmooth="best", colorbar=dict(title="°C")),
+                go.Contour(x=xs, y=ys, z=Z, contours=dict(start=727, end=1500, size=773, coloring="none"), showscale=False,
+                           line=dict(color="white", width=2), hoverinfo="skip")]))
+        Z0 = field(snaps[-1])
+        figA = go.Figure(data=[
+            go.Heatmap(x=xs, y=ys, z=Z0, zmin=25, zmax=1600, colorscale="Inferno", zsmooth="best", colorbar=dict(title="°C")),
+            go.Contour(x=xs, y=ys, z=Z0, contours=dict(start=727, end=1500, size=773, coloring="none"), showscale=False,
+                       line=dict(color="white", width=2), hoverinfo="skip")], frames=frames)
+        shapes = []
+        zt = 0.0
+        for zi in [top] + [z for z in res["iface"] if top < z < bot] + [bot]:
+            yy = (zi - top) * DXmm
+            shapes.append(dict(type="line", x0=xs[0], x1=xs[-1], y0=yy, y1=yy, line=dict(color="rgba(200,200,200,0.5)", width=1, dash="dot")))
+        steps = [dict(method="animate", label=f"{times_s[i]*1000:.0f}", args=[[str(i)], dict(mode="immediate", frame=dict(duration=0, redraw=True), transition=dict(duration=0))]) for i in range(len(snaps))]
+        figA.update_layout(
+            title="Cross-section (axisymmetric): temperature field   •   white lines = HAZ (727 °C) and molten nugget (1500 °C)",
+            template="plotly_dark", height=520, margin=dict(l=40, r=20, b=40, t=60),
+            xaxis=dict(title="Radius (mm)", scaleanchor="y", scaleratio=1), yaxis=dict(title="Depth (mm)", autorange="reversed"), shapes=shapes,
+            updatemenus=[dict(type="buttons", direction="left", x=0.0, y=-0.12, buttons=[
+                dict(label="▶ Play", method="animate", args=[None, dict(frame=dict(duration=140, redraw=True), fromcurrent=True, transition=dict(duration=0))]),
+                dict(label="⏸ Pause", method="animate", args=[[None], dict(mode="immediate", frame=dict(duration=0, redraw=False))])])],
+            sliders=[dict(active=len(snaps) - 1, x=0.15, len=0.85, y=-0.05, currentvalue=dict(prefix="Time (ms): "), steps=steps)])
 
-    st.plotly_chart(figA, use_container_width=True)
-    ca, cb, cc = st.columns(3)
-    ca.plotly_chart(figC, use_container_width=True)
-    cb.plotly_chart(figR, use_container_width=True)
-    cc.plotly_chart(figT, use_container_width=True)
-    st.caption("Press ▶ Play (or drag the time slider) to watch the nugget grow. The animation runs in your browser, so playback does not re-run the server. "
-               "Dynamic resistance falls as contact resistance collapses and the sheets heat — the typical shape seen in SORPAS and in real weld monitors.")
+        # ---- curves
+        tms = rec["t"] * 1000
+        figC = go.Figure()
+        figC.add_trace(go.Scatter(x=tms, y=rec["dia"], name="Nugget dia (mm)", line=dict(color="#ffb300", width=3)))
+        figC.add_hline(y=target_min, line=dict(color="cyan", dash="dash"), annotation_text="min target")
+        figC.add_hline(y=E, line=dict(color="red", dash="dash"), annotation_text="expulsion limit")
+        figC.update_layout(title="Nugget growth", xaxis_title="Time (ms)", yaxis_title="Diameter (mm)", template="plotly_dark", height=330, margin=dict(l=40, r=20, b=40, t=50))
+        figR = go.Figure()
+        mask = rec["I"] > 0
+        figR.add_trace(go.Scatter(x=tms[mask], y=rec["rdyn"][mask], name="Dynamic resistance", line=dict(color="#69f0ae", width=3), mode="lines"))
+        figR.update_layout(title="Dynamic resistance (µΩ)", xaxis_title="Time (ms)", yaxis_title="R (µΩ)", template="plotly_dark", height=330, margin=dict(l=40, r=20, b=40, t=50))
+        figT = go.Figure()
+        figT.add_trace(go.Scatter(x=tms, y=rec["tmax"], name="Peak temperature in sheets", line=dict(color="#ff7043", width=3)))
+        figT.add_hline(y=1500, line=dict(color="white", dash="dot"), annotation_text="melting")
+        figT.update_layout(title="Peak temperature (°C)", xaxis_title="Time (ms)", yaxis_title="°C", template="plotly_dark", height=330, margin=dict(l=40, r=20, b=40, t=50))
+
+        st.plotly_chart(figA, use_container_width=True)
+        ca, cb, cc = st.columns(3)
+        ca.plotly_chart(figC, use_container_width=True)
+        cb.plotly_chart(figR, use_container_width=True)
+        cc.plotly_chart(figT, use_container_width=True)
+        st.caption("Press ▶ Play (or drag the time slider) to watch the nugget grow. The animation runs in your browser, so playback does not re-run the server. "
+                   "Dynamic resistance falls as contact resistance collapses and the sheets heat — the typical shape seen in SORPAS and in real weld monitors.")
 
 # ======================================================================================
 # TAB 3 : STRENGTH & METALLURGY
 # ======================================================================================
 with tab_report:
     src = st.radio("Nugget size used for strength estimate", ["Lobe model", "2D simulation"], horizontal=True)
+    if src == "2D simulation" and not run_it:
+        st.warning("Switch on ▶ Run 2D simulation (tab 2) first. Using the lobe model for now.")
+        src = "Lobe model"
     d_use = float(nugget(active_current, active_time, active_force)) if src == "Lobe model" else float(dia)
     expulsion_calc = float(expulsion(active_force))
     predicted_tss = (np.pi * d_use ** 2 / 4.0) * uts_weighted / 1000.0
