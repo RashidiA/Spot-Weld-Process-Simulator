@@ -108,14 +108,14 @@ def simulate_weld(layers, zinc, d_tip, force_kg, current, weld_cyc, pulses, cool
     rc_el0 = 1.6e-9 * el_scale
     F_ref = 2500.0
     a_cur = a * 1.05
-    snap_every = max(1, int(round(cycle / dt / 2.0)))
+    snap_every = max(1, int(round(1e-3 / dt)))
     rec_every = max(1, int(round(1e-3 / dt)))
 
     cond_mask = (active & (mat > 0)).astype(float)
     # precompute radial geometry factors
     rf_ = r_f[1:-1]
     vol_fac = (r_c * DX)
-    snaps, snap_t = [], []
+    snaps, snap_t = [T.astype(np.float32).copy()], [0.0]
     rec = {'t': [], 'dia': [], 'pen': [], 'tmax': [], 'rdyn': [], 'I': []}
     t = 0.0
     step = 0
@@ -198,6 +198,9 @@ def simulate_weld(layers, zinc, d_tip, force_kg, current, weld_cyc, pulses, cool
         if stopped:
             break
     snaps.append(T.astype(np.float32).copy()); snap_t.append(t)
+    if len(snaps) > 120:                                   # keep the animation light: at most 120 frames
+        keep = np.unique(np.linspace(0, len(snaps) - 1, 120).round().astype(int))
+        snaps = [snaps[i] for i in keep]; snap_t = [snap_t[i] for i in keep]
     for kk in rec: rec[kk] = np.array(rec[kk])
     sheet_haz = (T[top_sheet:bot_sheet] >= T_HAZ)
     haz_r = (sheet_haz.any(axis=0).nonzero()[0].max() + 1) * DX * 1e3 if sheet_haz.any() else 0.0
@@ -239,7 +242,7 @@ materials_db = {
 # SIDEBAR INPUTS
 # ======================================================================================
 with st.sidebar:
-    st.caption("Weld_Lobe v2.7")
+    st.caption("Weld_Lobe v2.8")
     basis = st.radio("Calculation basis", ["Factory Excel model (mild steel, 2-ply, Ø4 mm tip)", "Generic model (any material, 2–3 ply)"],
                      help="Factory model = the equations tuned from factory experiments (mild steel, 2 panels, Ø4 mm tip). Generic model = the earlier formula for other materials.")
     factory = basis.startswith("Factory")
@@ -325,24 +328,28 @@ else:
     I_MIN, I_MAX, T_MIN, T_MAX, F_MIN, F_MAX = 5000, 13000, 3, 24, 100, 450
     I_DEF, T_DEF, F_DEF, I_STEP, F_STEP = 9500, 16, 250, 100, 10
 
-with st.sidebar:
-    st.header("3. Operating point")
-    active_current = st.slider("Weld current (A)", I_MIN, I_MAX, I_DEF, step=I_STEP)
-    active_time = st.slider("Weld time (cycles)", T_MIN, T_MAX, T_DEF, step=1)
-    active_force = st.slider("Electrode force (kg)", F_MIN, F_MAX, F_DEF, step=F_STEP)
-    if factory:
-        quality = st.radio("Required nugget level", ["General spot", "Important spot"], horizontal=True)
+tab_lobe, tab_sim, tab_report, tab_notes = st.tabs(["🧊 3D Lobe + Slice Plane", "🔥 2D Process Simulation", "📊 Strength & Metallurgy", "ℹ️ Model notes"])
 
-    st.header("4. Schedule (2D simulation)")
-    freq = st.radio("Mains frequency", [50, 60], horizontal=True)
-    n_pulses = st.slider("Number of pulses", 1, 3, 1)
-    cool_cyc = st.slider("Cool time between pulses (cycles)", 0, 10, 4) if n_pulses > 1 else 0
-    hold_cyc = st.slider("Hold time after weld (cycles)", 0, 10, 4)
-    with st.expander("Advanced thermal model"):
-        heat_scale = st.slider("Heat-input factor", 0.3, 1.5, 0.75, step=0.05, help="Scales all Joule heating in the 2D model.")
-        contact_scale = st.slider("Contact resistance factor", 0.2, 3.0, 1.0, step=0.1)
-        calibrate = st.checkbox("Calibrate 2D model to the lobe equation at the operating point", value=factory,
-                                help="Adjusts the heat-input factor automatically so the 2D nugget equals the lobe-equation nugget at this operating point.")
+# operating point + schedule live at the top of the 2D process-simulation tab
+with tab_sim:
+    with st.container(border=True):
+        st.markdown("##### ⚙️ Operating point & weld schedule")
+        oc1, oc2, oc3 = st.columns(3)
+        active_current = oc1.slider("Weld current (A)", I_MIN, I_MAX, I_DEF, step=I_STEP)
+        active_time = oc2.slider("Weld time (cycles)", T_MIN, T_MAX, T_DEF, step=1)
+        active_force = oc3.slider("Electrode force (kg)", F_MIN, F_MAX, F_DEF, step=F_STEP)
+        oq1, oq2, oq3, oq4 = st.columns(4)
+        if factory:
+            quality = oq1.radio("Required nugget level", ["General spot", "Important spot"], horizontal=True)
+        freq = oq2.radio("Mains frequency (Hz)", [50, 60], horizontal=True)
+        n_pulses = oq3.slider("Number of pulses", 1, 3, 1)
+        hold_cyc = oq4.slider("Hold time (cycles)", 0, 10, 4)
+        cool_cyc = st.slider("Cool time between pulses (cycles)", 0, 10, 4) if n_pulses > 1 else 0
+        with st.expander("Advanced thermal model"):
+            heat_scale = st.slider("Heat-input factor", 0.3, 1.5, 0.75, step=0.05, help="Scales all Joule heating in the 2D model.")
+            contact_scale = st.slider("Contact resistance factor", 0.2, 3.0, 1.0, step=0.1)
+            calibrate = st.checkbox("Calibrate 2D model to the lobe equation at the operating point", value=factory,
+                                    help="Adjusts the heat-input factor automatically so the 2D nugget equals the lobe-equation nugget at this operating point.")
 
 # --------------------------------------------------------------------------------------
 # nugget / expulsion functions used by every tab
@@ -372,7 +379,6 @@ currents = np.linspace(I_MIN, I_MAX, 50)
 times = np.linspace(T_MIN, T_MAX, 40)
 forces = np.linspace(F_MIN, F_MAX, 40)
 
-tab_lobe, tab_sim, tab_report, tab_notes = st.tabs(["🧊 3D Lobe + Slice Plane", "🔥 2D Process Simulation", "📊 Strength & Metallurgy", "ℹ️ Model notes"])
 
 ZONE_COLORS = ["#cfd8dc", "#9ccc65", "#42a5f5", "#f48fb1", "#ff6d00"] if factory else ["#cfd8dc", "#66bb6a", "#ff6d00"]
 N_ZONE = len(ZONE_COLORS)
@@ -572,13 +578,15 @@ base_args = (sim_layers, bool(is_zinc), float(d_tip), float(active_force), float
              int(n_pulses), int(cool_cyc), int(hold_cyc), float(freq))
 
 with tab_sim:
-    run_it = st.toggle("▶ Run 2D simulation", value=False, key="run2d",
-                       help="Switch on to solve the 2D thermal model (a few seconds). It is off by default so the lobe tab stays fast.")
-    stop_at_target = st.checkbox("Stop the simulation when the target nugget diameter is reached", value=True,
+    rc1, rc2, rc3 = st.columns([1, 2, 2])
+    run_it = rc1.toggle("▶ Run simulation", value=True, key="run2d_v2", help="Solves the 2D thermal model for the settings above (cached, so repeated runs are instant).")
+    frame_ms = rc3.slider("Animation delay per frame (ms)  — larger = slower motion", 20, 1500, 300, step=10,
+                          help="Slow-motion control for ▶ Play. Each frame is 1 ms of weld time.")
+    stop_at_target = rc2.checkbox("Stop the simulation when the target nugget diameter is reached", value=True,
                                  help="The weld current is cut as soon as the molten nugget reaches the required minimum diameter (sidebar: General / Important spot).")
     dia = 0.0
     if not run_it:
-        st.info("Switch on **▶ Run 2D simulation** to solve nugget growth for the current settings (sidebar). Results are cached, so moving the lobe plane is not slowed down.")
+        st.info("Switch on **▶ Run simulation** to solve nugget growth for the current settings (sidebar). Results are cached, so moving the lobe plane is not slowed down.")
     else:
         hs_used = heat_scale
         with st.spinner("Solving transient heat-conduction / Joule-heating model..."):
@@ -627,8 +635,7 @@ with tab_sim:
         cbar = dict(title="Temperature (°C)", tickvals=list(tick_v), ticktext=[f"{v:.3E}" for v in tick_v], thickness=18, len=0.95)
 
         def field(Tm):
-            h = np.where(act, Tm, np.nan)
-            return np.round(np.concatenate([h[:, ::-1], h], axis=1))
+            return np.round(np.concatenate([Tm[:, ::-1], Tm], axis=1))
 
         snaps = res["snaps"]; times_s = res["snap_t"]
         def tlabel(i):
@@ -641,13 +648,30 @@ with tab_sim:
         for zi in [z for z in res["iface"] if top < z < bot]:
             yy = (zi - top) * DXmm
             shapes.append(dict(type="line", x0=xs[0], x1=xs[-1], y0=yy, y1=yy, line=dict(color="rgba(255,255,255,0.9)", width=1)))
-        steps = [dict(method="animate", label=f"{times_s[i]*1000:.0f}", args=[[str(i)], dict(mode="immediate", frame=dict(duration=0, redraw=True), transition=dict(duration=0))]) for i in range(len(snaps))]
+        # smooth electrode silhouette: white polygons hide everything outside the analytic cap profile, plus a thin outline
+        a_mm = d_tip / 2.0
+        hh = np.linspace(0.0, EL_H * 1e3, 70)
+        rr = a_mm + (EL_R * 1e3 - a_mm) * (1.0 - np.exp(-hh / 2.0))
+        y_bot_sheet = (bot - top) * DXmm
+        XL = float(xs[0]); XR = float(xs[-1])
+        for sgn, y_face, ydir in ((1, 0.0, -1.0), (2, y_bot_sheet, 1.0)):
+            yy_ = y_face + ydir * hh
+            y_far = float(yy_[-1])
+            for side in (-1.0, 1.0):
+                outer_x = XL if side < 0 else XR
+                pts = [(outer_x, y_face), (outer_x, y_far)] + [(side * float(rr[i]), float(yy_[i])) for i in range(len(hh) - 1, -1, -1)]
+                path = "M " + " L ".join(f"{px:.3f},{py:.3f}" for px, py in pts) + " Z"
+                shapes.append(dict(type="path", path=path, fillcolor="white", line=dict(width=0), layer="above"))
+                line_path = "M " + " L ".join(f"{side * float(rr[i]):.3f},{float(yy_[i]):.3f}" for i in range(len(hh)))
+                shapes.append(dict(type="path", path=line_path, line=dict(color="#455a64", width=1.5), layer="above"))
+        _k = max(1, len(snaps) // 8)
+        steps = [dict(method="animate", label=(f"{times_s[i]*1000:.0f}" if (i % _k == 0 or i == len(snaps) - 1) else ""), args=[[str(i)], dict(mode="immediate", frame=dict(duration=0, redraw=True), transition=dict(duration=0))]) for i in range(len(snaps))]
         figA.update_layout(
             title=tlabel(len(snaps) - 1), template="plotly_white", plot_bgcolor="white", paper_bgcolor="white", height=560, margin=dict(l=40, r=20, b=60, t=60),
             xaxis=dict(title="Radius (mm)", scaleanchor="y", scaleratio=1, showgrid=False, zeroline=False, range=[xs[0], xs[-1]]),
             yaxis=dict(title="Depth (mm)", autorange="reversed", showgrid=False, zeroline=False), shapes=shapes,
             updatemenus=[dict(type="buttons", direction="left", x=0.0, y=-0.1, buttons=[
-                dict(label="▶ Play", method="animate", args=[None, dict(frame=dict(duration=120, redraw=True), fromcurrent=True, transition=dict(duration=0))]),
+                dict(label="▶ Play", method="animate", args=[None, dict(frame=dict(duration=int(frame_ms), redraw=True), fromcurrent=True, transition=dict(duration=0))]),
                 dict(label="⏸ Pause", method="animate", args=[[None], dict(mode="immediate", frame=dict(duration=0, redraw=False))])])],
             sliders=[dict(active=len(snaps) - 1, x=0.15, len=0.85, y=-0.03, currentvalue=dict(prefix="Time (ms): "), steps=steps)])
 
@@ -681,7 +705,7 @@ with tab_sim:
 with tab_report:
     src = st.radio("Nugget size used for strength estimate", ["Lobe model", "2D simulation"], horizontal=True)
     if src == "2D simulation" and not run_it:
-        st.warning("Switch on ▶ Run 2D simulation (tab 2) first. Using the lobe model for now.")
+        st.warning("Switch on ▶ Run simulation (tab 2) first. Using the lobe model for now.")
         src = "Lobe model"
     d_use = float(nugget(active_current, active_time, active_force)) if src == "Lobe model" else float(dia)
     expulsion_calc = float(expulsion(active_force))
