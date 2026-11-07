@@ -242,7 +242,10 @@ materials_db = {
 # SIDEBAR INPUTS
 # ======================================================================================
 with st.sidebar:
-    st.caption("Weld_Lobe v2.8")
+    st.caption("Weld_Lobe v2.9")
+    transformer = st.radio("⚡ Transformer type", ["AC transformer", "MFDC transformer"],
+                           help="Factory equations differ between AC and MFDC transformers (efficiency constant 0.241 for AC, 0.37 for MFDC). Applies to the Factory model and to every material.")
+    mfdc = transformer.startswith("MFDC")
     basis = st.radio("Calculation basis", ["Factory Excel model (mild steel, 2-ply, Ø4 mm tip)", "Generic model (any material, 2–3 ply)"],
                      help="Factory model = the equations tuned from factory experiments (mild steel, 2 panels, Ø4 mm tip). Generic model = the earlier formula for other materials.")
     factory = basis.startswith("Factory")
@@ -313,7 +316,8 @@ with st.sidebar:
         k_exp = st.number_input("Expulsion limit (k·√t)", value=9.0, step=0.1)
         st.caption("These factors were inferred from your Excel lobe table (colour boundaries). Edit them to match your factory standard.")
 GEN_D, IMP_D, HI_D, EXP_D = k_gen * np.sqrt(t_min), k_imp * np.sqrt(t_min), k_hi * np.sqrt(t_min), k_exp * np.sqrt(t_min)
-I_REC_KA = (1.2 if t_min >= 1 else 1.16) * np.sqrt((9.7 * 3.14 * (GEN_D ** 2 / 4.0) * total_t) / (0.24 * (0.0001 * C_REC * 0.02))) / 1000.0 / np.sqrt(m_heat)
+K_NUG, K_REC = (0.37, 0.37) if mfdc else (0.241, 0.24)      # transformer constants (AC / MFDC)
+I_REC_KA = (1.2 if t_min >= 1 else 1.16) * np.sqrt((9.7 * 3.14 * (GEN_D ** 2 / 4.0) * total_t) / (K_REC * (0.0001 * C_REC * 0.02))) / 1000.0 / np.sqrt(m_heat)
 if is_zinc:
     I_REC_KA *= 1.2
 I_REC = I_REC_KA * 1000.0
@@ -333,7 +337,7 @@ tab_lobe, tab_sim, tab_report, tab_notes = st.tabs(["🧊 3D Lobe + Slice Plane"
 # operating point + schedule live at the top of the 2D process-simulation tab
 with tab_sim:
     with st.container(border=True):
-        st.markdown("##### ⚙️ Operating point & weld schedule")
+        st.markdown("##### ⚙️ Operating point & weld schedule" + (f"   —   {transformer}" if factory else ""))
         oc1, oc2, oc3 = st.columns(3)
         active_current = oc1.slider("Weld current (A)", I_MIN, I_MAX, I_DEF, step=I_STEP)
         active_time = oc2.slider("Weld time (cycles)", T_MIN, T_MAX, T_DEF, step=1)
@@ -366,7 +370,7 @@ else:
 def nugget(I, T, F):
     if factory:
         I_eff = np.asarray(I, dtype=float) / (1.2 if is_zinc else 1.0)   # zinc sheet needs +20 % current for the same nugget
-        return np.sqrt((4 * 1.2 * m_heat * I_eff ** 2 * 0.241 * 0.0001 * (0.02 * np.asarray(T, dtype=float))) /
+        return np.sqrt((4 * 1.2 * m_heat * I_eff ** 2 * K_NUG * 0.0001 * (0.02 * np.asarray(T, dtype=float))) /
                        ((np.asarray(F, dtype=float) / F_REC) * 9.7 * total_t * 3.14))
     return k_approx * ((I * tip_eff) / 10000.0) ** 2 * (T / 10.0) * (300.0 / F) ** 0.25 * 5.5
 
@@ -401,7 +405,7 @@ with tab_lobe:
     try:
         if factory:
             d_target = float(nugget(I_REC, C_REC, F_REC))
-            st.markdown("#### Recommended setting (factory equations)")
+            st.markdown(f"#### Recommended setting (factory equations — {transformer})")
             r1, r2, r3, r4, r5 = st.columns(5)
             r1.metric("Weld force", f"{F_REC:.0f} kg")
             r2.metric("Weld time", f"{C_REC:.1f} cycles")
@@ -742,7 +746,8 @@ with tab_notes:
 - Recommended force: F = (0.3428·t² + 1.327·t + 0.5865)·1000 / 9.81 kg, with t = thinnest sheet (mm)
 - Recommended weld time: 10 × t_min cycles
 - Recommended current: I = f·√[ 9.7·3.14·(d²/4)·t_total / (0.24·(0.0001·cycles·0.02)) ] / 1000 kA, f = 1.2 if t_min ≥ 1 mm else 1.16, d = general-spot nugget
-- Nugget diameter: d = √[ 4·1.2·I²·0.241·0.0001·(0.02·cycles) / ((F/F_rec)·9.7·t_total·3.14) ]
+- Nugget diameter: d = √[ 4·1.2·I²·K·0.0001·(0.02·cycles) / ((F/F_rec)·9.7·t_total·3.14) ]
+- Transformer constant K: 0.241 for an AC transformer, 0.37 for an MFDC transformer (K = 0.24 / 0.37 in the recommended-current equation; the MFDC value there is inferred from the nugget equation — please confirm). Applies to every material.
 - Zinc-coated sheet: +20 % current (applied as I/1.2 inside the nugget equation).
 - Nugget-size limits (general, important, upper important band, expulsion) are inferred from the colour boundaries of the Excel lobe table and are editable in the sidebar.
 
