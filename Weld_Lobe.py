@@ -242,7 +242,7 @@ materials_db = {
 # SIDEBAR INPUTS
 # ======================================================================================
 with st.sidebar:
-    st.caption("Weld_Lobe v3.4")
+    st.caption("Weld_Lobe v3.5")
     transformer = st.radio("⚡ Transformer type", ["AC transformer", "MFDC transformer"],
                            help="Factory equations differ between AC and MFDC transformers (efficiency constant 0.241 for AC, 0.37 for MFDC). Applies to the Factory model and to every material.")
     mfdc = transformer.startswith("MFDC")
@@ -811,6 +811,18 @@ with tab_wcct:
             span = st.slider("Cross-arrow maximum length (± % of weld time)", 10, 100, 100, step=5,
                              help="Double-headed arrows follow the constant-nugget line (current² × time = constant) and stop at the edge of the shaded region (yellow / blue lines). Reduce to shorten them.") / 100.0
         k_sel = d_sel / np.sqrt(tm_w)
+        st.markdown("**Show / hide**")
+        vr1 = st.columns(5)
+        v_gen = vr1[0].checkbox("1) Min nugget (yellow)", value=True, key="wv_gen")
+        v_imp = vr1[1].checkbox("2) Important (blue)", value=True, key="wv_imp")
+        v_exp = vr1[2].checkbox("3) Before expulsion (red)", value=True, key="wv_exp")
+        v_sel = vr1[3].checkbox("Selected Ø (green dashed)", value=True, key="wv_sel")
+        v_shade = vr1[4].checkbox("Shaded region", value=True, key="wv_shade")
+        vr2 = st.columns(5)
+        v_lab = vr2[0].checkbox("Thickness / force labels", value=True, key="wv_lab")
+        v_arr = vr2[1].checkbox("Cross arrows", value=True, key="wv_arr")
+        v_star = vr2[2].checkbox("Your combination (star)", value=True, key="wv_star")
+        v_drop = vr2[3].checkbox("Drop lines", value=True, key="wv_drop")
         with cB:
             st.markdown(f"**Combination:** t1 = {w_t1:.2f} mm, t2 = {w_t2:.2f} mm (total {tt_w:.2f} mm)")
             st.markdown(f"**Calibration:** heat factor {w_m:.2f}, force factor {w_f:.2f}" + (", zinc +20 % current" if is_zinc else "") + (f", MFDC ×{tf:.2f} current" if mfdc else ""))
@@ -864,23 +876,26 @@ with tab_wcct:
         y1 = float(np.ceil(max(np.max(a) for a in ys) + 2)); y0 = 0.0
 
         ann_list = []
-        for (I_, c_, F_, col_), (ul, lr) in zip(arrows, ends):
+        for (I_, c_, F_, col_), (ul, lr) in (zip(arrows, ends) if v_arr else []):
             ann_list.append(dict(x=lr[0], y=lr[1], ax=ul[0], ay=ul[1], xref="x", yref="y", axref="x", ayref="y", showarrow=True,
                                  arrowhead=2, startarrowhead=2, arrowsize=1.1, arrowwidth=1.6, arrowcolor=col_, text=""))
             ann_list.append(dict(x=ul[0], y=ul[1], xref="x", yref="y", showarrow=False, text=f"{F_:.0f} kgf", font=dict(size=10, color=col_),
                                  xanchor="right", yanchor="bottom"))
         figW = go.Figure()
-        figW.add_trace(go.Scatter(x=lines["gen"][:, 0], y=lines["gen"][:, 1], mode="lines+markers", name="1) Minimum nugget (general spot)",
+        if v_shade:
+            figW.add_trace(go.Scatter(x=np.concatenate([lines["gen"][:, 0], lines["exp"][::-1, 0]]), y=np.concatenate([lines["gen"][:, 1], lines["exp"][::-1, 1]]),
+                                      mode="none", fill="toself", fillcolor="rgba(66,165,245,0.14)", name="Acceptable region", hoverinfo="skip"))
+        if v_gen: figW.add_trace(go.Scatter(x=lines["gen"][:, 0], y=lines["gen"][:, 1], mode="lines+markers", name="1) Minimum nugget (general spot)",
                                   line=dict(color="#f9a825", width=4), marker=dict(size=6, color="#f9a825")))
-        figW.add_trace(go.Scatter(x=lines["exp"][:, 0], y=lines["exp"][:, 1], mode="lines+markers", name="3) Nugget just before expulsion",
-                                  line=dict(color="#c62828", width=4), marker=dict(size=6, color="#c62828"), fill="tonexty", fillcolor="rgba(66,165,245,0.14)"))
-        figW.add_trace(go.Scatter(x=lines["imp"][:, 0], y=lines["imp"][:, 1], mode="lines+markers", name="2) Important-spot nugget",
+        if v_exp: figW.add_trace(go.Scatter(x=lines["exp"][:, 0], y=lines["exp"][:, 1], mode="lines+markers", name="3) Nugget just before expulsion",
+                                  line=dict(color="#c62828", width=4), marker=dict(size=6, color="#c62828")))
+        if v_imp: figW.add_trace(go.Scatter(x=lines["imp"][:, 0], y=lines["imp"][:, 1], mode="lines+markers", name="2) Important-spot nugget",
                                   line=dict(color="#1e40af", width=4), marker=dict(size=6, color="#1e40af")))
-        figW.add_trace(go.Scatter(x=lines["sel"][:, 0], y=lines["sel"][:, 1], mode="lines", name=f"Selected nugget (Ø = {k_sel:.2f}·√t)",
+        if v_sel: figW.add_trace(go.Scatter(x=lines["sel"][:, 0], y=lines["sel"][:, 1], mode="lines", name=f"Selected nugget (Ø = {k_sel:.2f}·√t)",
                                   line=dict(color="#2e7d32", width=3, dash="dash")))
         lab = [0.8, 0.9, 1.0, 1.2, 1.4, 1.6, 1.8, 2.0]
         idx = [int(np.where(th == v)[0][0]) for v in lab if v in th]
-        figW.add_trace(go.Scatter(x=lines["sel"][idx, 0], y=lines["sel"][idx, 1], mode="markers+text", showlegend=False,
+        if v_lab: figW.add_trace(go.Scatter(x=lines["sel"][idx, 0], y=lines["sel"][idx, 1], mode="markers+text", showlegend=False,
                                   marker=dict(size=9, color="#2e7d32", symbol="circle-open", line=dict(width=2)),
                                   text=[f"{th[i]:.1f} mm (Ø{lines['sel'][i, 3]:.1f})<br>{lines['sel'][i, 2]:.0f} kgf" for i in idx],
                                   textposition="top left", textfont=dict(size=11, color="#1b5e20")))
@@ -892,11 +907,11 @@ with tab_wcct:
             figW.add_trace(go.Scatter(x=[mit_my[c][0] for c in show_cls], y=[mit_my[c][1] for c in show_cls], mode="markers+text", showlegend=False,
                                       marker=dict(size=12, symbol="diamond-open", color=[cols[c] for c in show_cls], line=dict(width=2)),
                                       text=[c for c in show_cls], textposition="bottom right"))
-        figW.add_trace(go.Scatter(x=[my["sel"][0]], y=[my["sel"][1]], mode="markers", name="Your combination (selected Ø)",
+        if v_star: figW.add_trace(go.Scatter(x=[my["sel"][0]], y=[my["sel"][1]], mode="markers", name="Your combination (selected Ø)",
                                   marker=dict(size=16, color="black", symbol="star")))
         shapes_w = [dict(type="line", x0=my["sel"][0], x1=my["sel"][0], y0=y0, y1=my["sel"][1], line=dict(color="#555", width=1, dash="dot")),
                     dict(type="line", x0=x0, x1=my["sel"][0], y0=my["sel"][1], y1=my["sel"][1], line=dict(color="#555", width=1, dash="dot"))]
-        figW.update_layout(template="plotly_white", height=660, margin=dict(l=60, r=70, b=60, t=40), shapes=shapes_w,
+        figW.update_layout(template="plotly_white", height=660, margin=dict(l=60, r=70, b=60, t=40), shapes=shapes_w if v_drop else [],
                            xaxis=dict(title="Welding current (kA)", range=[x0, x1], dtick=1, gridcolor="#cfd8dc"),
                            yaxis=dict(title="Weld time (cycles, 50 Hz)", range=[y0, y1], dtick=2 if y1 < 40 else 5, gridcolor="#cfd8dc"),
                            annotations=ann_list, legend=dict(orientation="h", y=-0.16))
