@@ -242,7 +242,7 @@ materials_db = {
 # SIDEBAR INPUTS
 # ======================================================================================
 with st.sidebar:
-    st.caption("Weld_Lobe v3.3")
+    st.caption("Weld_Lobe v3.4")
     transformer = st.radio("⚡ Transformer type", ["AC transformer", "MFDC transformer"],
                            help="Factory equations differ between AC and MFDC transformers (efficiency constant 0.241 for AC, 0.37 for MFDC). Applies to the Factory model and to every material.")
     mfdc = transformer.startswith("MFDC")
@@ -795,16 +795,17 @@ with tab_wcct:
         tm_w, tt_w = min(w_t1, w_t2), w_t1 + w_t2
 
         st.markdown(f"#### WCCT chart — {transformer}, {'3' if len(layers_t) == 3 else '2'} panels" + ("" if factory else "  (generic model: same chart, scaled for your materials)"))
-        st.caption("Weld current vs weld time for each sheet thickness. **Yellow** = minimum (general-spot) nugget, **blue** = maximum (important-spot) nugget, "
+        st.caption("Weld current vs weld time for each sheet thickness. **Yellow** = minimum (general-spot) nugget, **blue** = important-spot nugget, **red** = largest nugget before expulsion (shaded region = acceptable range), "
                    "**green dashed** = the nugget Ø you pick. **Cross arrows** (as in the original Mitsubishi chart) show the applicable current/time range through each thickness point at its force. Optional markers show the **Mitsubishi A / B / C class** table (mild steel, AC, 2 panels) scaled to your stack. "
                    "For 3 panels the sidebar input sets t1 = medium thickness and t2 = sum of the other two.")
         cA, cB = st.columns([2, 1])
-        gD, iD = k_gen * np.sqrt(tm_w), k_imp * np.sqrt(tm_w)
+        gD, iD = k_gen * np.sqrt(tm_w), k_exp * np.sqrt(tm_w)
+        impD = k_imp * np.sqrt(tm_w)
         if iD <= gD:
             iD = gD + 0.05
         with cA:
-            d_sel = st.slider("Acceptable nugget Ø (mm), from minimum to maximum for this sheet combination",
-                              float(round(gD, 2)), float(round(iD, 2)), float(round((gD + iD) / 2.0, 2)), step=0.05)
+            d_sel = st.slider("Acceptable nugget Ø (mm), from minimum (general) up to the expulsion limit",
+                              float(round(gD, 2)), float(round(iD, 2)), float(round((gD + impD) / 2.0, 2)), step=0.05)
             show_cls = st.multiselect("Mitsubishi classes to overlay", ["A", "B", "C"], default=["A"], format_func=lambda c: _MIT_NAME[c],
                                       help="A = best condition (short time, high current), C = ordinary condition (long time, low current). Class B/C need many more cycles, so the time axis grows.")
             span = st.slider("Cross-arrow maximum length (± % of weld time)", 10, 100, 100, step=5,
@@ -827,8 +828,8 @@ with tab_wcct:
             return I_ * np.sqrt(tt / (2.0 * tm)) * tf * zf / np.sqrt(w_m), cyc_, F_ * w_f
 
         th = np.round(np.arange(0.6, 2.01, 0.1), 2)
-        lines = {key: np.array([wcct_eq(t_, 2 * t_, kk) for t_ in th]) for key, kk in (("gen", k_gen), ("sel", k_sel), ("imp", k_imp))}
-        my = {key: wcct_eq(tm_w, tt_w, kk) for key, kk in (("gen", k_gen), ("sel", k_sel), ("imp", k_imp))}
+        lines = {key: np.array([wcct_eq(t_, 2 * t_, kk) for t_ in th]) for key, kk in (("gen", k_gen), ("sel", k_sel), ("imp", k_imp), ("exp", k_exp))}
+        my = {key: wcct_eq(tm_w, tt_w, kk) for key, kk in (("gen", k_gen), ("sel", k_sel), ("imp", k_imp), ("exp", k_exp))}
         cols = {"A": "#c62828", "B": "#6a1b9a", "C": "#546e7a"}
         mit_lines = {}
         for c in show_cls:
@@ -839,7 +840,7 @@ with tab_wcct:
         idx0 = [int(np.where(th == v)[0][0]) for v in lab if v in th]
 
         _gc, _gi = lines["gen"][:, 1], lines["gen"][:, 0]
-        _ic, _ii = lines["imp"][:, 1], lines["imp"][:, 0]
+        _ic, _ii = lines["exp"][:, 1], lines["exp"][:, 0]
 
         def _inside(I_, c_):
             return (_gc.min() <= c_ <= _gc.max()) and (np.interp(c_, _gc, _gi) - 1e-6 <= I_ <= np.interp(c_, _ic, _ii) + 1e-6)
@@ -857,8 +858,8 @@ with tab_wcct:
             return (I_ / np.sqrt(f_hi), c_ * f_hi), (I_ / np.sqrt(f_lo), c_ * f_lo)      # upper-left end, lower-right end
         arrows = [(lines["sel"][i, 0], lines["sel"][i, 1], lines["sel"][i, 2], "#2e7d32") for i in idx0] + [(my["sel"][0], my["sel"][1], my["sel"][2], "#000000")]
         ends = [arrow_ends(a[0], a[1]) for a in arrows]
-        xs = [lines["gen"][:, 0], lines["imp"][:, 0], [my["sel"][0]]] + [v[1][:, 0] for v in mit_lines.values()] + [[mit_my[c][0]] for c in show_cls] + [[e[0][0], e[1][0]] for e in ends]
-        ys = [lines["imp"][:, 1], [my["sel"][1]]] + [v[1][:, 1] for v in mit_lines.values()] + [[mit_my[c][1]] for c in show_cls] + [[e[0][1], e[1][1]] for e in ends]
+        xs = [lines["gen"][:, 0], lines["exp"][:, 0], [my["sel"][0]]] + [v[1][:, 0] for v in mit_lines.values()] + [[mit_my[c][0]] for c in show_cls] + [[e[0][0], e[1][0]] for e in ends]
+        ys = [lines["exp"][:, 1], [my["sel"][1]]] + [v[1][:, 1] for v in mit_lines.values()] + [[mit_my[c][1]] for c in show_cls] + [[e[0][1], e[1][1]] for e in ends]
         x0, x1 = float(np.floor(min(np.min(a) for a in xs) - 0.6)), float(np.ceil(max(np.max(a) for a in xs) + 0.6))
         y1 = float(np.ceil(max(np.max(a) for a in ys) + 2)); y0 = 0.0
 
@@ -869,10 +870,12 @@ with tab_wcct:
             ann_list.append(dict(x=ul[0], y=ul[1], xref="x", yref="y", showarrow=False, text=f"{F_:.0f} kgf", font=dict(size=10, color=col_),
                                  xanchor="right", yanchor="bottom"))
         figW = go.Figure()
-        figW.add_trace(go.Scatter(x=lines["gen"][:, 0], y=lines["gen"][:, 1], mode="lines+markers", name="Minimum nugget (general points)",
+        figW.add_trace(go.Scatter(x=lines["gen"][:, 0], y=lines["gen"][:, 1], mode="lines+markers", name="1) Minimum nugget (general spot)",
                                   line=dict(color="#f9a825", width=4), marker=dict(size=6, color="#f9a825")))
-        figW.add_trace(go.Scatter(x=lines["imp"][:, 0], y=lines["imp"][:, 1], mode="lines+markers", name="Maximum nugget (important points)",
-                                  line=dict(color="#1e40af", width=4), marker=dict(size=6, color="#1e40af"), fill="tonexty", fillcolor="rgba(66,165,245,0.16)"))
+        figW.add_trace(go.Scatter(x=lines["exp"][:, 0], y=lines["exp"][:, 1], mode="lines+markers", name="3) Nugget just before expulsion",
+                                  line=dict(color="#c62828", width=4), marker=dict(size=6, color="#c62828"), fill="tonexty", fillcolor="rgba(66,165,245,0.14)"))
+        figW.add_trace(go.Scatter(x=lines["imp"][:, 0], y=lines["imp"][:, 1], mode="lines+markers", name="2) Important-spot nugget",
+                                  line=dict(color="#1e40af", width=4), marker=dict(size=6, color="#1e40af")))
         figW.add_trace(go.Scatter(x=lines["sel"][:, 0], y=lines["sel"][:, 1], mode="lines", name=f"Selected nugget (Ø = {k_sel:.2f}·√t)",
                                   line=dict(color="#2e7d32", width=3, dash="dash")))
         lab = [0.8, 0.9, 1.0, 1.2, 1.4, 1.6, 1.8, 2.0]
@@ -903,7 +906,7 @@ with tab_wcct:
         st.markdown("#### Setting for your sheet combination")
         g1, g2, g3, g4, g5 = st.columns(5)
         g1.metric("Selected nugget Ø", f"{d_sel:.2f} mm", f"range {gD:.2f} – {iD:.2f}", delta_color="off")
-        g2.metric("Weld current", f"{my['sel'][0]:.2f} kA", f"{my['gen'][0]:.2f} – {my['imp'][0]:.2f} kA", delta_color="off")
+        g2.metric("Weld current", f"{my['sel'][0]:.2f} kA", f"min {my['gen'][0]:.2f} / imp. {my['imp'][0]:.2f} / expulsion {my['exp'][0]:.2f}", delta_color="off")
         g3.metric("Weld time (50 Hz)", f"{my['sel'][1]:.1f} cycles")
         g4.metric("Weld time (60 Hz)", f"{my['sel'][1] * 1.2:.1f} cycles")
         g5.metric("Electrode force", f"{my['sel'][2]:.0f} kgf")
@@ -914,8 +917,8 @@ with tab_wcct:
 
         with st.expander("Reference tables (equal-thickness 2-ply stacks) and check against the Mitsubishi table"):
             tbl = pd.DataFrame({"Thickness each (mm)": th, "Force (kgf)": lines["sel"][:, 2].round(0), "Time 50 Hz (cyc)": lines["sel"][:, 1].round(1),
-                                "I min Ø (kA)": lines["gen"][:, 0].round(2), "I selected (kA)": lines["sel"][:, 0].round(2), "I max Ø (kA)": lines["imp"][:, 0].round(2),
-                                "Ø min (mm)": lines["gen"][:, 3].round(1), "Ø selected (mm)": lines["sel"][:, 3].round(1), "Ø max (mm)": lines["imp"][:, 3].round(1)})
+                                "I min Ø (kA)": lines["gen"][:, 0].round(2), "I selected (kA)": lines["sel"][:, 0].round(2), "I important (kA)": lines["imp"][:, 0].round(2), "I before expulsion (kA)": lines["exp"][:, 0].round(2),
+                                "Ø min (mm)": lines["gen"][:, 3].round(1), "Ø selected (mm)": lines["sel"][:, 3].round(1), "Ø important (mm)": lines["imp"][:, 3].round(1), "Ø expulsion (mm)": lines["exp"][:, 3].round(1)})
             st.dataframe(tbl, use_container_width=True, hide_index=True)
             st.markdown("Mild steel, AC, no zinc: factory equation (general nugget) against the Mitsubishi A class")
             ch = []
