@@ -242,7 +242,7 @@ materials_db = {
 # SIDEBAR INPUTS
 # ======================================================================================
 with st.sidebar:
-    st.caption("Weld_Lobe v3.5")
+    st.caption("Weld_Lobe v3.6")
     transformer = st.radio("⚡ Transformer type", ["AC transformer", "MFDC transformer"],
                            help="Factory equations differ between AC and MFDC transformers (efficiency constant 0.241 for AC, 0.37 for MFDC). Applies to the Factory model and to every material.")
     mfdc = transformer.startswith("MFDC")
@@ -796,7 +796,7 @@ with tab_wcct:
 
         st.markdown(f"#### WCCT chart — {transformer}, {'3' if len(layers_t) == 3 else '2'} panels" + ("" if factory else "  (generic model: same chart, scaled for your materials)"))
         st.caption("Weld current vs weld time for each sheet thickness. **Yellow** = minimum (general-spot) nugget, **blue** = important-spot nugget, **red** = largest nugget before expulsion (shaded region = acceptable range), "
-                   "**green dashed** = the nugget Ø you pick. **Cross arrows** (as in the original Mitsubishi chart) show the applicable current/time range through each thickness point at its force. Optional markers show the **Mitsubishi A / B / C class** table (mild steel, AC, 2 panels) scaled to your stack. "
+                   "**green dashed** = the nugget Ø you pick. **Cross arrows** (as in the original Mitsubishi chart) show the applicable current/time range through each thickness point at its force. **Hover over a cross arrow** to read the current, weld time and nugget Ø at that point. "
                    "For 3 panels the sidebar input sets t1 = medium thickness and t2 = sum of the other two.")
         cA, cB = st.columns([2, 1])
         gD, iD = k_gen * np.sqrt(tm_w), k_exp * np.sqrt(tm_w)
@@ -806,10 +806,9 @@ with tab_wcct:
         with cA:
             d_sel = st.slider("Acceptable nugget Ø (mm), from minimum (general) up to the expulsion limit",
                               float(round(gD, 2)), float(round(iD, 2)), float(round((gD + impD) / 2.0, 2)), step=0.05)
-            show_cls = st.multiselect("Mitsubishi classes to overlay", ["A", "B", "C"], default=["A"], format_func=lambda c: _MIT_NAME[c],
-                                      help="A = best condition (short time, high current), C = ordinary condition (long time, low current). Class B/C need many more cycles, so the time axis grows.")
+            show_cls = []      # Mitsubishi overlay not displayed (table is still used for the reference check)
             span = st.slider("Cross-arrow maximum length (± % of weld time)", 10, 100, 100, step=5,
-                             help="Double-headed arrows follow the constant-nugget line (current² × time = constant) and stop at the edge of the shaded region (yellow / blue lines). Reduce to shorten them.") / 100.0
+                             help="Double-headed arrows cross the shaded region from the minimum-nugget side (longer time, lower current) to the expulsion side (shorter time, higher current). Reduce to shorten them.") / 100.0
         k_sel = d_sel / np.sqrt(tm_w)
         st.markdown("**Show / hide**")
         vr1 = st.columns(5)
@@ -857,30 +856,42 @@ with tab_wcct:
         def _inside(I_, c_):
             return (_gc.min() <= c_ <= _gc.max()) and (np.interp(c_, _gc, _gi) - 1e-6 <= I_ <= np.interp(c_, _ic, _ii) + 1e-6)
 
+        ARW_A = 1.0     # arrow path: I = I0·(c/c0)^-A  ->  nugget ∝ c^(0.5-A), i.e. grows toward short time / higher current
+
+        def _ipath(I_, c_, f):
+            return I_ * f ** (-ARW_A), c_ * f
+
         def arrow_ends(I_, c_):
-            """double arrow along the constant-nugget line (I²·c = const), clipped to the shaded region between the yellow and blue lines"""
+            """double arrow crossing the shaded region from the minimum-nugget side (upper-left) to the expulsion side (lower-right)"""
             f_hi, f_lo = 1.0 + span, max(1.0 - span, 0.3)
             if _inside(I_, c_):
                 for f in np.linspace(1.0, 1.0 + span, 241):
-                    if not _inside(I_ / np.sqrt(f), c_ * f):
+                    if not _inside(*_ipath(I_, c_, f)):
                         f_hi = max(1.0, f - (span / 240.0)); break
                 for f in np.linspace(1.0, max(1.0 - span, 0.3), 241):
-                    if not _inside(I_ / np.sqrt(f), c_ * f):
+                    if not _inside(*_ipath(I_, c_, f)):
                         f_lo = min(1.0, f + (span / 240.0)); break
-            return (I_ / np.sqrt(f_hi), c_ * f_hi), (I_ / np.sqrt(f_lo), c_ * f_lo)      # upper-left end, lower-right end
-        arrows = [(lines["sel"][i, 0], lines["sel"][i, 1], lines["sel"][i, 2], "#2e7d32") for i in idx0] + [(my["sel"][0], my["sel"][1], my["sel"][2], "#000000")]
-        ends = [arrow_ends(a[0], a[1]) for a in arrows]
+            return _ipath(I_, c_, f_hi), _ipath(I_, c_, f_lo), f_hi, f_lo
+        arrows = [(lines["sel"][i, 0], lines["sel"][i, 1], lines["sel"][i, 2], "#2e7d32", lines["sel"][i, 3], th[i]) for i in idx0] + [(my["sel"][0], my["sel"][1], my["sel"][2], "#000000", my["sel"][3], tm_w)]
+        ends = [arrow_ends(a[0], a[1])[:2] for a in arrows]
+        ends_f = [arrow_ends(a[0], a[1])[2:] for a in arrows]
         xs = [lines["gen"][:, 0], lines["exp"][:, 0], [my["sel"][0]]] + [v[1][:, 0] for v in mit_lines.values()] + [[mit_my[c][0]] for c in show_cls] + [[e[0][0], e[1][0]] for e in ends]
         ys = [lines["exp"][:, 1], [my["sel"][1]]] + [v[1][:, 1] for v in mit_lines.values()] + [[mit_my[c][1]] for c in show_cls] + [[e[0][1], e[1][1]] for e in ends]
         x0, x1 = float(np.floor(min(np.min(a) for a in xs) - 0.6)), float(np.ceil(max(np.max(a) for a in xs) + 0.6))
         y1 = float(np.ceil(max(np.max(a) for a in ys) + 2)); y0 = 0.0
 
         ann_list = []
-        for (I_, c_, F_, col_), (ul, lr) in (zip(arrows, ends) if v_arr else []):
+        for (I_, c_, F_, col_, d_, t_), (ul, lr) in (zip(arrows, ends) if v_arr else []):
             ann_list.append(dict(x=lr[0], y=lr[1], ax=ul[0], ay=ul[1], xref="x", yref="y", axref="x", ayref="y", showarrow=True,
                                  arrowhead=2, startarrowhead=2, arrowsize=1.1, arrowwidth=1.6, arrowcolor=col_, text=""))
             ann_list.append(dict(x=ul[0], y=ul[1], xref="x", yref="y", showarrow=False, text=f"{F_:.0f} kgf", font=dict(size=10, color=col_),
                                  xanchor="right", yanchor="bottom"))
+        hov_tr = []
+        for (I_, c_, F_, col_, d_, t_), (f_hi_, f_lo_) in (zip(arrows, ends_f) if v_arr else []):
+            fs = np.linspace(f_hi_, f_lo_, 31)
+            hx = np.array([_ipath(I_, c_, f)[0] for f in fs]); hy = c_ * fs
+            hd = d_ * (hx / I_) * np.sqrt(hy / c_)               # nugget ∝ I·√time at constant force
+            hov_tr.append((hx, hy, hd, F_, t_, col_))
         figW = go.Figure()
         if v_shade:
             figW.add_trace(go.Scatter(x=np.concatenate([lines["gen"][:, 0], lines["exp"][::-1, 0]]), y=np.concatenate([lines["gen"][:, 1], lines["exp"][::-1, 1]]),
@@ -907,6 +918,10 @@ with tab_wcct:
             figW.add_trace(go.Scatter(x=[mit_my[c][0] for c in show_cls], y=[mit_my[c][1] for c in show_cls], mode="markers+text", showlegend=False,
                                       marker=dict(size=12, symbol="diamond-open", color=[cols[c] for c in show_cls], line=dict(width=2)),
                                       text=[c for c in show_cls], textposition="bottom right"))
+        for hx, hy, hd, F_, t_, col_ in hov_tr:
+            figW.add_trace(go.Scatter(x=hx, y=hy, mode="markers", showlegend=False, marker=dict(size=14, color="rgba(0,0,0,0.001)"),
+                                      text=[f"<b>{t_:.2f} mm stack</b><br>Current: {x_:.2f} kA<br>Weld time: {y_:.1f} cycles (50 Hz) / {y_ * 1.2:.1f} (60 Hz)<br>Nugget Ø: {d__:.2f} mm<br>Force: {F_:.0f} kgf"
+                                            for x_, y_, d__ in zip(hx, hy, hd)], hoverinfo="text"))
         if v_star: figW.add_trace(go.Scatter(x=[my["sel"][0]], y=[my["sel"][1]], mode="markers", name="Your combination (selected Ø)",
                                   marker=dict(size=16, color="black", symbol="star")))
         shapes_w = [dict(type="line", x0=my["sel"][0], x1=my["sel"][0], y0=y0, y1=my["sel"][1], line=dict(color="#555", width=1, dash="dot")),
@@ -925,11 +940,6 @@ with tab_wcct:
         g3.metric("Weld time (50 Hz)", f"{my['sel'][1]:.1f} cycles")
         g4.metric("Weld time (60 Hz)", f"{my['sel'][1] * 1.2:.1f} cycles")
         g5.metric("Electrode force", f"{my['sel'][2]:.0f} kgf")
-        mt = pd.DataFrame([{"Condition": _MIT_NAME[c], "Current (kA)": round(mit_my[c][0], 2), "Time 50 Hz (cyc)": round(mit_my[c][1], 1),
-                            "Time 60 Hz (cyc)": round(mit_my[c][1] * 1.2, 1), "Force (kgf)": round(mit_my[c][2], 0)} for c in ("A", "B", "C")])
-        st.markdown("**Mitsubishi A / B / C conditions scaled to this stack**")
-        st.dataframe(mt, use_container_width=True, hide_index=True)
-
         with st.expander("Reference tables (equal-thickness 2-ply stacks) and check against the Mitsubishi table"):
             tbl = pd.DataFrame({"Thickness each (mm)": th, "Force (kgf)": lines["sel"][:, 2].round(0), "Time 50 Hz (cyc)": lines["sel"][:, 1].round(1),
                                 "I min Ø (kA)": lines["gen"][:, 0].round(2), "I selected (kA)": lines["sel"][:, 0].round(2), "I important (kA)": lines["imp"][:, 0].round(2), "I before expulsion (kA)": lines["exp"][:, 0].round(2),
