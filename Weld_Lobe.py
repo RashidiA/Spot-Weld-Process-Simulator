@@ -242,7 +242,7 @@ materials_db = {
 # SIDEBAR INPUTS
 # ======================================================================================
 with st.sidebar:
-    st.caption("Weld_Lobe v2.9")
+    st.caption("Weld_Lobe v3.0")
     transformer = st.radio("⚡ Transformer type", ["AC transformer", "MFDC transformer"],
                            help="Factory equations differ between AC and MFDC transformers (efficiency constant 0.241 for AC, 0.37 for MFDC). Applies to the Factory model and to every material.")
     mfdc = transformer.startswith("MFDC")
@@ -332,7 +332,7 @@ else:
     I_MIN, I_MAX, T_MIN, T_MAX, F_MIN, F_MAX = 5000, 13000, 3, 24, 100, 450
     I_DEF, T_DEF, F_DEF, I_STEP, F_STEP = 9500, 16, 250, 100, 10
 
-tab_lobe, tab_sim, tab_report, tab_notes = st.tabs(["🧊 3D Lobe + Slice Plane", "🔥 2D Process Simulation", "📊 Strength & Metallurgy", "ℹ️ Model notes"])
+tab_lobe, tab_sim, tab_report, tab_wcct, tab_notes = st.tabs(["🧊 3D Lobe + Slice Plane", "🔥 2D Process Simulation", "📊 Strength & Metallurgy", "📈 WCCT Chart", "ℹ️ Model notes"])
 
 # operating point + schedule live at the top of the 2D process-simulation tab
 with tab_sim:
@@ -736,6 +736,89 @@ with tab_report:
     b3.metric("Peak fusion hardness", f"{peak_fz_hardness:.1f} HV")
     b4.metric("Minimum HAZ hardness", f"{min_haz_hardness:.1f} HV")
     st.info(f"**Predicted failure mechanism:** {mode}")
+
+# ======================================================================================
+# TAB 4 : WCCT CHART  (weld current - weld time chart with minimum / maximum nugget lines)
+# ======================================================================================
+with tab_wcct:
+    try:
+        if not factory:
+            st.info("The WCCT chart is built from the factory equations. Select **Factory Excel model** in the sidebar to use it.")
+        else:
+            st.markdown(f"#### WCCT chart — {transformer}, 2 panels, Ø4 mm tip")
+            st.caption("Yellow = minimum (general-point) nugget line, blue = maximum (important-point) nugget line, green dashed = the nugget diameter you select. "
+                       "Each point is one sheet thickness (equal 2-ply stack) with its weld current, weld time and electrode force. "
+                       "For 3 panels: put the medium thickness at t1 and the sum of the other sheets at t2 (sidebar).")
+            w1, w2 = st.columns([2, 1])
+            with w1:
+                d_sel = st.slider("Acceptable nugget Ø (mm): from minimum (general) to maximum (important) for your sheet combination",
+                                  float(round(GEN_D, 2)), float(round(IMP_D, 2)), float(round((GEN_D + IMP_D) / 2.0, 2)), step=0.05)
+            k_sel = d_sel / np.sqrt(t_min)
+            with w2:
+                st.markdown(f"**Your combination:** {t1:.2f} + {t2:.2f} mm  \n{mat1} / {mat2}")
+
+            def wcct_point(ta, tb, k):
+                tm, tt = min(ta, tb), ta + tb
+                d = k * np.sqrt(tm)
+                cyc_ = 10.0 * tm
+                F_ = ((0.3428 * tm ** 2 + 1.327 * tm + 0.5865) * 1000.0 / 9.81) * f_force
+                I_ = (1.2 if tm >= 1 else 1.16) * np.sqrt((9.7 * 3.14 * (d ** 2 / 4.0) * tt) / (K_REC * (0.0001 * cyc_ * 0.02))) / 1000.0 / np.sqrt(m_heat)
+                if is_zinc:
+                    I_ *= 1.2
+                return I_, cyc_, F_, d
+
+            th = np.round(np.arange(0.6, 2.01, 0.1), 2)
+            lines = {}
+            for key, kk in (("gen", k_gen), ("sel", k_sel), ("imp", k_imp)):
+                P = np.array([wcct_point(t_, t_, kk) for t_ in th])
+                lines[key] = P
+            my = {key: wcct_point(t1, t2, kk) for key, kk in (("gen", k_gen), ("sel", k_sel), ("imp", k_imp))}
+            x_all = np.concatenate([lines["gen"][:, 0], lines["imp"][:, 0]]); y_all = lines["imp"][:, 1]
+            x0, x1 = float(np.floor(x_all.min() - 0.6)), float(np.ceil(x_all.max() + 0.6))
+            y0, y1 = 0.0, float(np.ceil(y_all.max() + 2))
+
+            figW = go.Figure()
+            figW.add_trace(go.Scatter(x=lines["gen"][:, 0], y=lines["gen"][:, 1], mode="lines+markers", name="Minimum nugget (general points)",
+                                      line=dict(color="#f9a825", width=4), marker=dict(size=6, color="#f9a825")))
+            figW.add_trace(go.Scatter(x=lines["imp"][:, 0], y=lines["imp"][:, 1], mode="lines+markers", name="Maximum nugget (important points)",
+                                      line=dict(color="#1e40af", width=4), marker=dict(size=6, color="#1e40af"), fill="tonexty", fillcolor="rgba(66,165,245,0.16)"))
+            lab = [0.8, 0.9, 1.0, 1.2, 1.4, 1.6, 1.8, 2.0]
+            idx = [int(np.where(th == v)[0][0]) for v in lab if v in th]
+            figW.add_trace(go.Scatter(x=lines["sel"][:, 0], y=lines["sel"][:, 1], mode="lines", name=f"Selected nugget (k = {k_sel:.2f}·√t)",
+                                      line=dict(color="#2e7d32", width=3, dash="dash")))
+            figW.add_trace(go.Scatter(x=lines["sel"][idx, 0], y=lines["sel"][idx, 1], mode="markers+text", showlegend=False,
+                                      marker=dict(size=9, color="#2e7d32", symbol="circle-open", line=dict(width=2)),
+                                      text=[f"{th[i]:.1f} mm (Ø{lines['sel'][i, 3]:.1f})<br>{lines['sel'][i, 2]:.0f} kgf" for i in idx],
+                                      textposition="top left", textfont=dict(size=11, color="#1b5e20")))
+            figW.add_trace(go.Scatter(x=[my["sel"][0]], y=[my["sel"][1]], mode="markers", name="Your combination",
+                                      marker=dict(size=16, color="black", symbol="star")))
+            shapes_w = [dict(type="line", x0=my["sel"][0], x1=my["sel"][0], y0=y0, y1=my["sel"][1], line=dict(color="#555", width=1, dash="dot")),
+                        dict(type="line", x0=x0, x1=my["sel"][0], y0=my["sel"][1], y1=my["sel"][1], line=dict(color="#555", width=1, dash="dot"))]
+            figW.add_trace(go.Scatter(x=[None], y=[None], yaxis="y2", showlegend=False))
+            figW.update_layout(template="plotly_white", height=640, margin=dict(l=60, r=70, b=60, t=40), shapes=shapes_w,
+                               xaxis=dict(title="Welding current (kA)", range=[x0, x1], dtick=1, gridcolor="#cfd8dc"),
+                               yaxis=dict(title="Weld time (cycles, 50 Hz)", range=[y0, y1], dtick=1, gridcolor="#cfd8dc"),
+                               yaxis2=dict(title="Weld time (cycles, 60 Hz)", overlaying="y", side="right", range=[y0 * 1.2, y1 * 1.2], showgrid=False),
+                               legend=dict(orientation="h", y=-0.14))
+            st.plotly_chart(figW, use_container_width=True)
+
+            st.markdown("#### Setting for your sheet combination")
+            g1, g2, g3, g4, g5 = st.columns(5)
+            g1.metric("Selected nugget Ø", f"{d_sel:.2f} mm", f"range {GEN_D:.2f} – {IMP_D:.2f}", delta_color="off")
+            g2.metric("Weld current", f"{my['sel'][0]:.2f} kA", f"{my['gen'][0]:.2f} – {my['imp'][0]:.2f} kA", delta_color="off")
+            g3.metric("Weld time (50 Hz)", f"{my['sel'][1]:.1f} cycles")
+            g4.metric("Weld time (60 Hz)", f"{my['sel'][1] * 1.2:.1f} cycles")
+            g5.metric("Electrode force", f"{my['sel'][2]:.0f} kgf")
+            tbl = pd.DataFrame({"Thickness each (mm)": th, "Force (kgf)": lines["sel"][:, 2].round(0), "Time 50 Hz (cyc)": lines["sel"][:, 1].round(1),
+                                "Time 60 Hz (cyc)": (lines["sel"][:, 1] * 1.2).round(1),
+                                "I min Ø (kA)": lines["gen"][:, 0].round(2), "I selected (kA)": lines["sel"][:, 0].round(2), "I max Ø (kA)": lines["imp"][:, 0].round(2),
+                                "Ø min (mm)": lines["gen"][:, 3].round(1), "Ø selected (mm)": lines["sel"][:, 3].round(1), "Ø max (mm)": lines["imp"][:, 3].round(1)})
+            with st.expander("Reference table (equal-thickness 2-ply stacks)"):
+                st.dataframe(tbl, use_container_width=True, hide_index=True)
+            st.caption("The chart is generated from the factory equations for the selected transformer, material correction and zinc setting; "
+                       "the printed WCCT chart's experimental data points are not included.")
+    except Exception as _e:
+        _show_error("WCCT chart", _e)
 
 # ======================================================================================
 # TAB 4 : NOTES
