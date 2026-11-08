@@ -242,7 +242,7 @@ materials_db = {
 # SIDEBAR INPUTS
 # ======================================================================================
 with st.sidebar:
-    st.caption("Weld_Lobe v3.2")
+    st.caption("Weld_Lobe v3.3")
     transformer = st.radio("⚡ Transformer type", ["AC transformer", "MFDC transformer"],
                            help="Factory equations differ between AC and MFDC transformers (efficiency constant 0.241 for AC, 0.37 for MFDC). Applies to the Factory model and to every material.")
     mfdc = transformer.startswith("MFDC")
@@ -807,8 +807,8 @@ with tab_wcct:
                               float(round(gD, 2)), float(round(iD, 2)), float(round((gD + iD) / 2.0, 2)), step=0.05)
             show_cls = st.multiselect("Mitsubishi classes to overlay", ["A", "B", "C"], default=["A"], format_func=lambda c: _MIT_NAME[c],
                                       help="A = best condition (short time, high current), C = ordinary condition (long time, low current). Class B/C need many more cycles, so the time axis grows.")
-            span = st.slider("Cross-arrow span (± % of weld time around each recommended point)", 10, 60, 35, step=5,
-                             help="Double-headed arrows follow the constant-nugget line (current² × time = constant): lower current with longer time on one end, higher current with shorter time on the other.") / 100.0
+            span = st.slider("Cross-arrow maximum length (± % of weld time)", 10, 100, 100, step=5,
+                             help="Double-headed arrows follow the constant-nugget line (current² × time = constant) and stop at the edge of the shaded region (yellow / blue lines). Reduce to shorten them.") / 100.0
         k_sel = d_sel / np.sqrt(tm_w)
         with cB:
             st.markdown(f"**Combination:** t1 = {w_t1:.2f} mm, t2 = {w_t2:.2f} mm (total {tt_w:.2f} mm)")
@@ -838,9 +838,23 @@ with tab_wcct:
         lab = [0.8, 0.9, 1.0, 1.2, 1.4, 1.6, 1.8, 2.0]
         idx0 = [int(np.where(th == v)[0][0]) for v in lab if v in th]
 
+        _gc, _gi = lines["gen"][:, 1], lines["gen"][:, 0]
+        _ic, _ii = lines["imp"][:, 1], lines["imp"][:, 0]
+
+        def _inside(I_, c_):
+            return (_gc.min() <= c_ <= _gc.max()) and (np.interp(c_, _gc, _gi) - 1e-6 <= I_ <= np.interp(c_, _ic, _ii) + 1e-6)
+
         def arrow_ends(I_, c_):
-            ch, cl = c_ * (1 + span), max(c_ * (1 - span), 0.5)
-            return (I_ * np.sqrt(c_ / ch), ch), (I_ * np.sqrt(c_ / cl), cl)      # upper-left end, lower-right end (iso-nugget: I²·c = const)
+            """double arrow along the constant-nugget line (I²·c = const), clipped to the shaded region between the yellow and blue lines"""
+            f_hi, f_lo = 1.0 + span, max(1.0 - span, 0.3)
+            if _inside(I_, c_):
+                for f in np.linspace(1.0, 1.0 + span, 241):
+                    if not _inside(I_ / np.sqrt(f), c_ * f):
+                        f_hi = max(1.0, f - (span / 240.0)); break
+                for f in np.linspace(1.0, max(1.0 - span, 0.3), 241):
+                    if not _inside(I_ / np.sqrt(f), c_ * f):
+                        f_lo = min(1.0, f + (span / 240.0)); break
+            return (I_ / np.sqrt(f_hi), c_ * f_hi), (I_ / np.sqrt(f_lo), c_ * f_lo)      # upper-left end, lower-right end
         arrows = [(lines["sel"][i, 0], lines["sel"][i, 1], lines["sel"][i, 2], "#2e7d32") for i in idx0] + [(my["sel"][0], my["sel"][1], my["sel"][2], "#000000")]
         ends = [arrow_ends(a[0], a[1]) for a in arrows]
         xs = [lines["gen"][:, 0], lines["imp"][:, 0], [my["sel"][0]]] + [v[1][:, 0] for v in mit_lines.values()] + [[mit_my[c][0]] for c in show_cls] + [[e[0][0], e[1][0]] for e in ends]
