@@ -242,7 +242,7 @@ materials_db = {
 # SIDEBAR INPUTS
 # ======================================================================================
 with st.sidebar:
-    st.caption("Weld_Lobe v3.0")
+    st.caption("Weld_Lobe v3.1")
     transformer = st.radio("⚡ Transformer type", ["AC transformer", "MFDC transformer"],
                            help="Factory equations differ between AC and MFDC transformers (efficiency constant 0.241 for AC, 0.37 for MFDC). Applies to the Factory model and to every material.")
     mfdc = transformer.startswith("MFDC")
@@ -252,12 +252,19 @@ with st.sidebar:
 
     st.header("1. Sheet stack")
     if factory:
-        st.caption("2 panels. The factory equations are tuned on mild steel; other grades are scaled from it (see Model notes). AHSS = DP600 / TRIP780 • UHSS = DP980 • HPF = Boron (Usibor 1500).")
+        npan = st.radio("Number of panels", ["2 panels", "3 panels"], horizontal=True, key="f_np",
+                        help="3 panels: the equations and the WCCT chart use the MEDIUM thickness as t1 and the SUM of the other two sheets as t2 (factory rule).")
+        st.caption("The factory equations are tuned on mild steel; other grades are scaled from it (see Model notes). AHSS = DP600 / TRIP780 • UHSS = DP980 • HPF = Boron (Usibor 1500).")
         mat1 = st.selectbox("Ply 1 Material (Top)", list(materials_db.keys()), key="f_m1")
-        mat2 = st.selectbox("Ply 2 Material (Bottom)", list(materials_db.keys()), key="f_m2")
+        mat2 = st.selectbox("Ply 2 Material (" + ("Middle" if npan.startswith("3") else "Bottom") + ")", list(materials_db.keys()), key="f_m2")
         t1 = st.slider("Thickness 1 (mm)", 0.5, 3.0, 0.65, step=0.05)
         t2 = st.slider("Thickness 2 (mm)", 0.5, 3.0, 0.65, step=0.05)
-        mat3_selection, use_ply3, t3 = "None (Revert to 2-Ply)", False, 0.0
+        if npan.startswith("3"):
+            mat3_selection = st.selectbox("Ply 3 Material (Bottom)", list(materials_db.keys()), key="f_m3")
+            t3 = st.slider("Thickness 3 (mm)", 0.5, 3.0, 0.65, step=0.05)
+            use_ply3 = True
+        else:
+            mat3_selection, use_ply3, t3 = "None (Revert to 2-Ply)", False, 0.0
     else:
         mat1 = st.selectbox("Ply 1 Material (Top)", list(materials_db.keys()))
         t1 = st.slider("Thickness 1 (mm)", 0.5, 3.0, 1.0, step=0.1)
@@ -283,6 +290,16 @@ layers_p = [materials_db[mat1], materials_db[mat2]] + ([materials_db[mat3_select
 layers_t = [t1, t2] + ([t3] if use_ply3 else [])
 total_t = sum(layers_t)
 t_min = min(layers_t)
+if factory and use_ply3:
+    t_min = sorted(layers_t)[1]          # factory rule for 3 panels: medium thickness plays the role of t1
+if len(layers_t) == 3:
+    _ts = sorted(layers_t); w_t1, w_t2 = _ts[1], _ts[0] + _ts[2]      # WCCT input: medium thickness, sum of the others
+else:
+    w_t1, w_t2 = t1, t2
+with st.sidebar:
+    if len(layers_t) == 3:
+        st.info(f"WCCT input (3 panels): t1 = medium = {w_t1:.2f} mm, t2 = sum of the other two = {w_t2:.2f} mm" +
+                ("  \nThe factory equations use the same rule (t_min = medium sheet)." if factory else ""))
 k_mod_weighted = sum(t * p["k_mod"] for t, p in zip(layers_t, layers_p)) / total_t
 res_weighted = sum(t * p["res_factor"] for t, p in zip(layers_t, layers_p)) / total_t
 uts_weighted = sum(t * p["uts"] for t, p in zip(layers_t, layers_p)) / total_t
@@ -738,85 +755,150 @@ with tab_report:
     st.info(f"**Predicted failure mechanism:** {mode}")
 
 # ======================================================================================
-# TAB 4 : WCCT CHART  (weld current - weld time chart with minimum / maximum nugget lines)
+# TAB 4 : WCCT CHART  (weld current - weld time chart, calibrated on the Mitsubishi A/B/C table)
 # ======================================================================================
+# Mitsubishi welding-parameter table, mild steel, AC transformer, 2 equal sheets (transcribed from the factory Excel "Reference 1").
+# columns per class: weld time (cycles, 50 Hz), force (kg), current (kA), strength (kg)
+_MIT_T = np.array([0.4, 0.5, 0.6, 0.8, 1.0, 1.2, 1.4, 1.6, 1.8, 2.0, 2.4, 2.8, 3.2, 4.0, 4.5, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0])
+_MIT_TIP = np.array([3.2, 3.5, 4.0, 4.5, 5.0, 5.5, 6.0, 6.3, 6.7, 7.0, 7.8, 8.5, 9.0, 10.0, 10.6, 11.3, 12.4, 13.4, 14.3, 15.2, 16.0])
+_MIT = {
+    "A": np.array([[4, 115, 5.2, 180], [5, 135, 6.0, 240], [6, 150, 6.6, 300], [7, 190, 7.8, 440], [8, 225, 8.8, 610], [10, 270, 9.8, 780], [12, 305, 10.6, 930],
+                   [13, 360, 11.5, 1060], [15, 410, 12.5, 1300], [17, 470, 13.3, 1450], [20, 580, 15.0, 1850], [23, 700, 16.2, 2380], [27, 820, 17.4, 3100],
+                   [33, 1100, 19.0, 4200], [38, 1200, 21.2, 4500], [42, 1400, 22.5, 5800], [50, 1750, 25.0, 7600], [58, 2200, 27.5, 9500], [67, 2500, 30.0, 11400],
+                   [75, 2900, 32.0, 13500], [83, 3200, 34.0, 16000]], float),
+    "B": np.array([[8, 75, 4.5, 160], [9, 90, 5.0, 210], [11, 100, 5.5, 280], [13, 125, 6.5, 400], [17, 150, 7.2, 540], [19, 175, 7.7, 680], [22, 210, 8.5, 850],
+                   [25, 240, 9.1, 1000], [28, 275, 9.7, 1180], [30, 300, 10.3, 1370], [37, 370, 11.3, 1770], [43, 430, 12.1, 2300], [50, 500, 12.9, 2850],
+                   [61, 630, 15.0, 3800], [64, 710, 15.7, 4300], [67, 800, 16.5, 5200], [92, 970, 18.0, 6800], [108, 1150, 19.5, 8500], [125, 1300, 21.0, 10400],
+                   [138, 1500, 22.5, 12300], [150, 1700, 24.0, 14400]], float),
+    "C": np.array([[17, 40, 3.5, 125], [20, 45, 4.0, 175], [22, 50, 4.3, 225], [25, 60, 5.0, 355], [30, 75, 5.6, 530], [33, 85, 6.1, 650], [38, 100, 6.6, 780],
+                   [43, 115, 7.0, 925], [48, 130, 7.5, 1100], [53, 150, 8.0, 1305], [64, 180, 8.6, 1685], [79, 220, 9.4, 2175], [88, 260, 10.0, 2665],
+                   [108, 340, 11.0, 3500], [117, 390, 11.8, 4000], [142, 440, 12.5, 4800], [175, 540, 14.0, 6300], [208, 650, 15.0, 7800], [233, 750, 16.0, 9500],
+                   [267, 880, 17.0, 11200], [283, 1000, 18.0, 13100]], float)}
+_MIT_NAME = {"A": "A class (best)", "B": "B class (medium)", "C": "C class (ordinary)"}
+
+
+def mit_lookup(cls, tm):
+    """cycles, force kg, current kA of the Mitsubishi table for thickness tm (linear interpolation)."""
+    M = _MIT[cls]
+    return tuple(float(np.interp(tm, _MIT_T, M[:, j])) for j in range(3))
+
+
 with tab_wcct:
     try:
-        if not factory:
-            st.info("The WCCT chart is built from the factory equations. Select **Factory Excel model** in the sidebar to use it.")
+        # ---- calibration factors for the current stack (mild steel, AC, 2 panels = 1.0) ----
+        if factory:
+            w_m, w_f = m_heat, f_force
         else:
-            st.markdown(f"#### WCCT chart — {transformer}, 2 panels, Ø4 mm tip")
-            st.caption("Yellow = minimum (general-point) nugget line, blue = maximum (important-point) nugget line, green dashed = the nugget diameter you select. "
-                       "Each point is one sheet thickness (equal 2-ply stack) with its weld current, weld time and electrode force. "
-                       "For 3 panels: put the medium thickness at t1 and the sum of the other sheets at t2 (sidebar).")
-            w1, w2 = st.columns([2, 1])
-            with w1:
-                d_sel = st.slider("Acceptable nugget Ø (mm): from minimum (general) to maximum (important) for your sheet combination",
-                                  float(round(GEN_D, 2)), float(round(IMP_D, 2)), float(round((GEN_D + IMP_D) / 2.0, 2)), step=0.05)
-            k_sel = d_sel / np.sqrt(t_min)
-            with w2:
-                st.markdown(f"**Your combination:** {t1:.2f} + {t2:.2f} mm  \n{mat1} / {mat2}")
+            w_m, w_f = float(res_weighted * k_mod_weighted), float(np.sqrt(uts_weighted / 270.0))
+        tf = float(np.sqrt(0.24 / K_REC))            # transformer: AC = 1.0, MFDC from the factory constants
+        zf = 1.2 if is_zinc else 1.0
+        tm_w, tt_w = min(w_t1, w_t2), w_t1 + w_t2
 
-            def wcct_point(ta, tb, k):
-                tm, tt = min(ta, tb), ta + tb
-                d = k * np.sqrt(tm)
-                cyc_ = 10.0 * tm
-                F_ = ((0.3428 * tm ** 2 + 1.327 * tm + 0.5865) * 1000.0 / 9.81) * f_force
-                I_ = (1.2 if tm >= 1 else 1.16) * np.sqrt((9.7 * 3.14 * (d ** 2 / 4.0) * tt) / (K_REC * (0.0001 * cyc_ * 0.02))) / 1000.0 / np.sqrt(m_heat)
-                if is_zinc:
-                    I_ *= 1.2
-                return I_, cyc_, F_, d
+        st.markdown(f"#### WCCT chart — {transformer}, {'3' if len(layers_t) == 3 else '2'} panels" + ("" if factory else "  (generic model: same chart, scaled for your materials)"))
+        st.caption("Weld current vs weld time for each sheet thickness. **Yellow** = minimum (general-spot) nugget, **blue** = maximum (important-spot) nugget, "
+                   "**green dashed** = the nugget Ø you pick. Optional markers show the **Mitsubishi A / B / C class** table (mild steel, AC, 2 panels) scaled to your stack. "
+                   "For 3 panels the sidebar input sets t1 = medium thickness and t2 = sum of the other two.")
+        cA, cB = st.columns([2, 1])
+        gD, iD = k_gen * np.sqrt(tm_w), k_imp * np.sqrt(tm_w)
+        if iD <= gD:
+            iD = gD + 0.05
+        with cA:
+            d_sel = st.slider("Acceptable nugget Ø (mm), from minimum to maximum for this sheet combination",
+                              float(round(gD, 2)), float(round(iD, 2)), float(round((gD + iD) / 2.0, 2)), step=0.05)
+            show_cls = st.multiselect("Mitsubishi classes to overlay", ["A", "B", "C"], default=["A"], format_func=lambda c: _MIT_NAME[c],
+                                      help="A = best condition (short time, high current), C = ordinary condition (long time, low current). Class B/C need many more cycles, so the time axis grows.")
+        k_sel = d_sel / np.sqrt(tm_w)
+        with cB:
+            st.markdown(f"**Combination:** t1 = {w_t1:.2f} mm, t2 = {w_t2:.2f} mm (total {tt_w:.2f} mm)")
+            st.markdown(f"**Calibration:** heat factor {w_m:.2f}, force factor {w_f:.2f}" + (", zinc +20 % current" if is_zinc else "") + (f", MFDC ×{tf:.2f} current" if mfdc else ""))
 
-            th = np.round(np.arange(0.6, 2.01, 0.1), 2)
-            lines = {}
-            for key, kk in (("gen", k_gen), ("sel", k_sel), ("imp", k_imp)):
-                P = np.array([wcct_point(t_, t_, kk) for t_ in th])
-                lines[key] = P
-            my = {key: wcct_point(t1, t2, kk) for key, kk in (("gen", k_gen), ("sel", k_sel), ("imp", k_imp))}
-            x_all = np.concatenate([lines["gen"][:, 0], lines["imp"][:, 0]]); y_all = lines["imp"][:, 1]
-            x0, x1 = float(np.floor(x_all.min() - 0.6)), float(np.ceil(x_all.max() + 0.6))
-            y0, y1 = 0.0, float(np.ceil(y_all.max() + 2))
+        def wcct_eq(tm, tt, k):
+            """factory-equation point: current kA, time cycles, force kgf, nugget mm"""
+            d = k * np.sqrt(tm)
+            cyc_ = 10.0 * tm
+            F_ = ((0.3428 * tm ** 2 + 1.327 * tm + 0.5865) * 1000.0 / 9.81) * w_f
+            I_ = (1.2 if tm >= 1 else 1.16) * np.sqrt((9.7 * 3.14 * (d ** 2 / 4.0) * tt) / (K_REC * (0.0001 * cyc_ * 0.02))) / 1000.0 / np.sqrt(w_m)
+            return I_ * zf, cyc_, F_ * 1.0, d
 
-            figW = go.Figure()
-            figW.add_trace(go.Scatter(x=lines["gen"][:, 0], y=lines["gen"][:, 1], mode="lines+markers", name="Minimum nugget (general points)",
-                                      line=dict(color="#f9a825", width=4), marker=dict(size=6, color="#f9a825")))
-            figW.add_trace(go.Scatter(x=lines["imp"][:, 0], y=lines["imp"][:, 1], mode="lines+markers", name="Maximum nugget (important points)",
-                                      line=dict(color="#1e40af", width=4), marker=dict(size=6, color="#1e40af"), fill="tonexty", fillcolor="rgba(66,165,245,0.16)"))
-            lab = [0.8, 0.9, 1.0, 1.2, 1.4, 1.6, 1.8, 2.0]
-            idx = [int(np.where(th == v)[0][0]) for v in lab if v in th]
-            figW.add_trace(go.Scatter(x=lines["sel"][:, 0], y=lines["sel"][:, 1], mode="lines", name=f"Selected nugget (k = {k_sel:.2f}·√t)",
-                                      line=dict(color="#2e7d32", width=3, dash="dash")))
-            figW.add_trace(go.Scatter(x=lines["sel"][idx, 0], y=lines["sel"][idx, 1], mode="markers+text", showlegend=False,
-                                      marker=dict(size=9, color="#2e7d32", symbol="circle-open", line=dict(width=2)),
-                                      text=[f"{th[i]:.1f} mm (Ø{lines['sel'][i, 3]:.1f})<br>{lines['sel'][i, 2]:.0f} kgf" for i in idx],
-                                      textposition="top left", textfont=dict(size=11, color="#1b5e20")))
-            figW.add_trace(go.Scatter(x=[my["sel"][0]], y=[my["sel"][1]], mode="markers", name="Your combination",
-                                      marker=dict(size=16, color="black", symbol="star")))
-            shapes_w = [dict(type="line", x0=my["sel"][0], x1=my["sel"][0], y0=y0, y1=my["sel"][1], line=dict(color="#555", width=1, dash="dot")),
-                        dict(type="line", x0=x0, x1=my["sel"][0], y0=my["sel"][1], y1=my["sel"][1], line=dict(color="#555", width=1, dash="dot"))]
-            figW.add_trace(go.Scatter(x=[None], y=[None], yaxis="y2", showlegend=False))
-            figW.update_layout(template="plotly_white", height=640, margin=dict(l=60, r=70, b=60, t=40), shapes=shapes_w,
-                               xaxis=dict(title="Welding current (kA)", range=[x0, x1], dtick=1, gridcolor="#cfd8dc"),
-                               yaxis=dict(title="Weld time (cycles, 50 Hz)", range=[y0, y1], dtick=1, gridcolor="#cfd8dc"),
-                               yaxis2=dict(title="Weld time (cycles, 60 Hz)", overlaying="y", side="right", range=[y0 * 1.2, y1 * 1.2], showgrid=False),
-                               legend=dict(orientation="h", y=-0.14))
-            st.plotly_chart(figW, use_container_width=True)
+        def mit_point(cls, tm, tt):
+            cyc_, F_, I_ = mit_lookup(cls, tm)
+            return I_ * np.sqrt(tt / (2.0 * tm)) * tf * zf / np.sqrt(w_m), cyc_, F_ * w_f
 
-            st.markdown("#### Setting for your sheet combination")
-            g1, g2, g3, g4, g5 = st.columns(5)
-            g1.metric("Selected nugget Ø", f"{d_sel:.2f} mm", f"range {GEN_D:.2f} – {IMP_D:.2f}", delta_color="off")
-            g2.metric("Weld current", f"{my['sel'][0]:.2f} kA", f"{my['gen'][0]:.2f} – {my['imp'][0]:.2f} kA", delta_color="off")
-            g3.metric("Weld time (50 Hz)", f"{my['sel'][1]:.1f} cycles")
-            g4.metric("Weld time (60 Hz)", f"{my['sel'][1] * 1.2:.1f} cycles")
-            g5.metric("Electrode force", f"{my['sel'][2]:.0f} kgf")
+        th = np.round(np.arange(0.6, 2.01, 0.1), 2)
+        lines = {key: np.array([wcct_eq(t_, 2 * t_, kk) for t_ in th]) for key, kk in (("gen", k_gen), ("sel", k_sel), ("imp", k_imp))}
+        my = {key: wcct_eq(tm_w, tt_w, kk) for key, kk in (("gen", k_gen), ("sel", k_sel), ("imp", k_imp))}
+        cols = {"A": "#c62828", "B": "#6a1b9a", "C": "#546e7a"}
+        mit_lines = {}
+        for c in show_cls:
+            tt_ = _MIT_T[(_MIT_T >= 0.6) & (_MIT_T <= 2.4)]
+            mit_lines[c] = np.array([mit_point(c, t_, 2 * t_) for t_ in tt_]); mit_lines[c] = (tt_, mit_lines[c])
+        mit_my = {c: mit_point(c, tm_w, tt_w) for c in ("A", "B", "C")}
+
+        xs = [lines["gen"][:, 0], lines["imp"][:, 0], [my["sel"][0]]] + [v[1][:, 0] for v in mit_lines.values()] + [[mit_my[c][0]] for c in show_cls]
+        ys = [lines["imp"][:, 1], [my["sel"][1]]] + [v[1][:, 1] for v in mit_lines.values()] + [[mit_my[c][1]] for c in show_cls]
+        x0, x1 = float(np.floor(min(np.min(a) for a in xs) - 0.6)), float(np.ceil(max(np.max(a) for a in xs) + 0.6))
+        y1 = float(np.ceil(max(np.max(a) for a in ys) + 2)); y0 = 0.0
+
+        figW = go.Figure()
+        figW.add_trace(go.Scatter(x=lines["gen"][:, 0], y=lines["gen"][:, 1], mode="lines+markers", name="Minimum nugget (general points)",
+                                  line=dict(color="#f9a825", width=4), marker=dict(size=6, color="#f9a825")))
+        figW.add_trace(go.Scatter(x=lines["imp"][:, 0], y=lines["imp"][:, 1], mode="lines+markers", name="Maximum nugget (important points)",
+                                  line=dict(color="#1e40af", width=4), marker=dict(size=6, color="#1e40af"), fill="tonexty", fillcolor="rgba(66,165,245,0.16)"))
+        figW.add_trace(go.Scatter(x=lines["sel"][:, 0], y=lines["sel"][:, 1], mode="lines", name=f"Selected nugget (Ø = {k_sel:.2f}·√t)",
+                                  line=dict(color="#2e7d32", width=3, dash="dash")))
+        lab = [0.8, 0.9, 1.0, 1.2, 1.4, 1.6, 1.8, 2.0]
+        idx = [int(np.where(th == v)[0][0]) for v in lab if v in th]
+        figW.add_trace(go.Scatter(x=lines["sel"][idx, 0], y=lines["sel"][idx, 1], mode="markers+text", showlegend=False,
+                                  marker=dict(size=9, color="#2e7d32", symbol="circle-open", line=dict(width=2)),
+                                  text=[f"{th[i]:.1f} mm (Ø{lines['sel'][i, 3]:.1f})<br>{lines['sel'][i, 2]:.0f} kgf" for i in idx],
+                                  textposition="top left", textfont=dict(size=11, color="#1b5e20")))
+        for c, (tt_, P) in mit_lines.items():
+            figW.add_trace(go.Scatter(x=P[:, 0], y=P[:, 1], mode="lines+markers", name=f"Mitsubishi {_MIT_NAME[c]}",
+                                      line=dict(color=cols[c], width=2, dash="dot"), marker=dict(size=7, symbol="diamond", color=cols[c]),
+                                      text=[f"{t_:.1f} mm, {f_:.0f} kgf" for t_, f_ in zip(tt_, P[:, 2])], hoverinfo="text+x+y"))
+        if show_cls:
+            figW.add_trace(go.Scatter(x=[mit_my[c][0] for c in show_cls], y=[mit_my[c][1] for c in show_cls], mode="markers+text", showlegend=False,
+                                      marker=dict(size=12, symbol="diamond-open", color=[cols[c] for c in show_cls], line=dict(width=2)),
+                                      text=[c for c in show_cls], textposition="bottom right"))
+        figW.add_trace(go.Scatter(x=[my["sel"][0]], y=[my["sel"][1]], mode="markers", name="Your combination (selected Ø)",
+                                  marker=dict(size=16, color="black", symbol="star")))
+        shapes_w = [dict(type="line", x0=my["sel"][0], x1=my["sel"][0], y0=y0, y1=my["sel"][1], line=dict(color="#555", width=1, dash="dot")),
+                    dict(type="line", x0=x0, x1=my["sel"][0], y0=my["sel"][1], y1=my["sel"][1], line=dict(color="#555", width=1, dash="dot"))]
+        figW.update_layout(template="plotly_white", height=660, margin=dict(l=60, r=70, b=60, t=40), shapes=shapes_w,
+                           xaxis=dict(title="Welding current (kA)", range=[x0, x1], dtick=1, gridcolor="#cfd8dc"),
+                           yaxis=dict(title="Weld time (cycles, 50 Hz)", range=[y0, y1], dtick=2 if y1 < 40 else 5, gridcolor="#cfd8dc"),
+                           legend=dict(orientation="h", y=-0.16))
+        st.plotly_chart(figW, use_container_width=True)
+        st.caption("Right-hand 60 Hz scale: multiply the 50 Hz cycles by 1.2.")
+
+        st.markdown("#### Setting for your sheet combination")
+        g1, g2, g3, g4, g5 = st.columns(5)
+        g1.metric("Selected nugget Ø", f"{d_sel:.2f} mm", f"range {gD:.2f} – {iD:.2f}", delta_color="off")
+        g2.metric("Weld current", f"{my['sel'][0]:.2f} kA", f"{my['gen'][0]:.2f} – {my['imp'][0]:.2f} kA", delta_color="off")
+        g3.metric("Weld time (50 Hz)", f"{my['sel'][1]:.1f} cycles")
+        g4.metric("Weld time (60 Hz)", f"{my['sel'][1] * 1.2:.1f} cycles")
+        g5.metric("Electrode force", f"{my['sel'][2]:.0f} kgf")
+        mt = pd.DataFrame([{"Condition": _MIT_NAME[c], "Current (kA)": round(mit_my[c][0], 2), "Time 50 Hz (cyc)": round(mit_my[c][1], 1),
+                            "Time 60 Hz (cyc)": round(mit_my[c][1] * 1.2, 1), "Force (kgf)": round(mit_my[c][2], 0)} for c in ("A", "B", "C")])
+        st.markdown("**Mitsubishi A / B / C conditions scaled to this stack**")
+        st.dataframe(mt, use_container_width=True, hide_index=True)
+
+        with st.expander("Reference tables (equal-thickness 2-ply stacks) and check against the Mitsubishi table"):
             tbl = pd.DataFrame({"Thickness each (mm)": th, "Force (kgf)": lines["sel"][:, 2].round(0), "Time 50 Hz (cyc)": lines["sel"][:, 1].round(1),
-                                "Time 60 Hz (cyc)": (lines["sel"][:, 1] * 1.2).round(1),
                                 "I min Ø (kA)": lines["gen"][:, 0].round(2), "I selected (kA)": lines["sel"][:, 0].round(2), "I max Ø (kA)": lines["imp"][:, 0].round(2),
                                 "Ø min (mm)": lines["gen"][:, 3].round(1), "Ø selected (mm)": lines["sel"][:, 3].round(1), "Ø max (mm)": lines["imp"][:, 3].round(1)})
-            with st.expander("Reference table (equal-thickness 2-ply stacks)"):
-                st.dataframe(tbl, use_container_width=True, hide_index=True)
-            st.caption("The chart is generated from the factory equations for the selected transformer, material correction and zinc setting; "
-                       "the printed WCCT chart's experimental data points are not included.")
+            st.dataframe(tbl, use_container_width=True, hide_index=True)
+            st.markdown("Mild steel, AC, no zinc: factory equation (general nugget) against the Mitsubishi A class")
+            ch = []
+            for t_ in _MIT_T[(_MIT_T >= 0.6) & (_MIT_T <= 3.2)]:
+                d_ = k_gen * np.sqrt(t_); Ie = (1.2 if t_ >= 1 else 1.16) * np.sqrt((9.7 * 3.14 * d_ ** 2 / 4 * 2 * t_) / (0.24 * (0.0001 * 10 * t_ * 0.02))) / 1000
+                cA_, FA_, IA_ = mit_lookup("A", t_); Fe_ = (0.3428 * t_ ** 2 + 1.327 * t_ + 0.5865) * 1000 / 9.81
+                ch.append({"t (mm)": t_, "I equation (kA)": round(Ie, 2), "I Mitsubishi A (kA)": IA_, "Δ current %": round((Ie / IA_ - 1) * 100, 1),
+                           "F equation (kgf)": round(Fe_), "F Mitsubishi A (kgf)": FA_, "time equation (cyc)": round(10 * t_, 1), "time Mitsubishi A (cyc)": cA_})
+            st.dataframe(pd.DataFrame(ch), use_container_width=True, hide_index=True)
+        st.caption("Calibration: the lines come from the factory equations, scaled for transformer type, material (heat and force factors from the sidebar, or from the material table in the Generic model), "
+                   "zinc and total stack thickness (current ∝ √t_total). The Mitsubishi markers use the same scaling: current × √(t_total / 2·t) × material factor. "
+                   "The material factors are assumptions to be tuned with your own trials. The Mitsubishi table was transcribed from the Excel screenshot — please verify the values.")
     except Exception as _e:
         _show_error("WCCT chart", _e)
 
