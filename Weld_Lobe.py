@@ -242,7 +242,7 @@ materials_db = {
 # SIDEBAR INPUTS
 # ======================================================================================
 with st.sidebar:
-    st.caption("Weld_Lobe v3.6")
+    st.caption("Weld_Lobe v3.7")
     transformer = st.radio("⚡ Transformer type", ["AC transformer", "MFDC transformer"],
                            help="Factory equations differ between AC and MFDC transformers (efficiency constant 0.241 for AC, 0.37 for MFDC). Applies to the Factory model and to every material.")
     mfdc = transformer.startswith("MFDC")
@@ -253,7 +253,7 @@ with st.sidebar:
     st.header("1. Sheet stack")
     if factory:
         npan = st.radio("Number of panels", ["2 panels", "3 panels"], horizontal=True, key="f_np",
-                        help="3 panels: the equations and the WCCT chart use the MEDIUM thickness as t1 and the SUM of the other two sheets as t2 (factory rule).")
+                        help="3 panels: the equations and the MSWLPM chart use the MEDIUM thickness as t1 and the SUM of the other two sheets as t2 (factory rule).")
         st.caption("The factory equations are tuned on mild steel; other grades are scaled from it (see Model notes). AHSS = DP600 / TRIP780 • UHSS = DP980 • HPF = Boron (Usibor 1500).")
         mat1 = st.selectbox("Ply 1 Material (Top)", list(materials_db.keys()), key="f_m1")
         mat2 = st.selectbox("Ply 2 Material (" + ("Middle" if npan.startswith("3") else "Bottom") + ")", list(materials_db.keys()), key="f_m2")
@@ -293,12 +293,12 @@ t_min = min(layers_t)
 if factory and use_ply3:
     t_min = sorted(layers_t)[1]          # factory rule for 3 panels: medium thickness plays the role of t1
 if len(layers_t) == 3:
-    _ts = sorted(layers_t); w_t1, w_t2 = _ts[1], _ts[0] + _ts[2]      # WCCT input: medium thickness, sum of the others
+    _ts = sorted(layers_t); w_t1, w_t2 = _ts[1], _ts[0] + _ts[2]      # MSWLPM input: medium thickness, sum of the others
 else:
     w_t1, w_t2 = t1, t2
 with st.sidebar:
     if len(layers_t) == 3:
-        st.info(f"WCCT input (3 panels): t1 = medium = {w_t1:.2f} mm, t2 = sum of the other two = {w_t2:.2f} mm" +
+        st.info(f"MSWLPM input (3 panels): t1 = medium = {w_t1:.2f} mm, t2 = sum of the other two = {w_t2:.2f} mm" +
                 ("  \nThe factory equations use the same rule (t_min = medium sheet)." if factory else ""))
 k_mod_weighted = sum(t * p["k_mod"] for t, p in zip(layers_t, layers_p)) / total_t
 res_weighted = sum(t * p["res_factor"] for t, p in zip(layers_t, layers_p)) / total_t
@@ -349,7 +349,7 @@ else:
     I_MIN, I_MAX, T_MIN, T_MAX, F_MIN, F_MAX = 5000, 13000, 3, 24, 100, 450
     I_DEF, T_DEF, F_DEF, I_STEP, F_STEP = 9500, 16, 250, 100, 10
 
-tab_lobe, tab_sim, tab_report, tab_wcct, tab_notes = st.tabs(["🧊 3D Lobe + Slice Plane", "🔥 2D Process Simulation", "📊 Strength & Metallurgy", "📈 WCCT Chart", "ℹ️ Model notes"])
+tab_lobe, tab_sim, tab_report, tab_wcct, tab_notes = st.tabs(["🧊 3D Lobe + Slice Plane", "🔥 2D Process Simulation", "📊 Strength & Metallurgy", "📈 Multi-Stack-Up Weld Lobe Prediction Model (MSWLPM)", "ℹ️ Model notes"])
 
 # operating point + schedule live at the top of the 2D process-simulation tab
 with tab_sim:
@@ -755,7 +755,7 @@ with tab_report:
     st.info(f"**Predicted failure mechanism:** {mode}")
 
 # ======================================================================================
-# TAB 4 : WCCT CHART  (weld current - weld time chart, calibrated on the Mitsubishi A/B/C table)
+# TAB 4 : MSWLPM  (Multi-Stack-Up Weld Lobe Prediction Model)  (weld current - weld time chart, calibrated on the Mitsubishi A/B/C table)
 # ======================================================================================
 # Mitsubishi welding-parameter table, mild steel, AC transformer, 2 equal sheets (transcribed from the factory Excel "Reference 1").
 # columns per class: weld time (cycles, 50 Hz), force (kg), current (kA), strength (kg)
@@ -794,7 +794,7 @@ with tab_wcct:
         zf = 1.2 if is_zinc else 1.0
         tm_w, tt_w = min(w_t1, w_t2), w_t1 + w_t2
 
-        st.markdown(f"#### WCCT chart — {transformer}, {'3' if len(layers_t) == 3 else '2'} panels" + ("" if factory else "  (generic model: same chart, scaled for your materials)"))
+        st.markdown(f"#### Multi-Stack-Up Weld Lobe Prediction Model (MSWLPM) — {transformer}, {'3' if len(layers_t) == 3 else '2'} panels" + ("" if factory else "  (generic model: same chart, scaled for your materials)"))
         st.caption("Weld current vs weld time for each sheet thickness. **Yellow** = minimum (general-spot) nugget, **blue** = important-spot nugget, **red** = largest nugget before expulsion (shaded region = acceptable range), "
                    "**green dashed** = the nugget Ø you pick. **Cross arrows** (as in the original Mitsubishi chart) show the applicable current/time range through each thickness point at its force. **Hover over a cross arrow** to read the current, weld time and nugget Ø at that point. "
                    "For 3 panels the sidebar input sets t1 = medium thickness and t2 = sum of the other two.")
@@ -957,7 +957,7 @@ with tab_wcct:
                    "zinc and total stack thickness (current ∝ √t_total). The Mitsubishi markers use the same scaling: current × √(t_total / 2·t) × material factor. "
                    "The material factors are assumptions to be tuned with your own trials. The Mitsubishi table was transcribed from the Excel screenshot — please verify the values.")
     except Exception as _e:
-        _show_error("WCCT chart", _e)
+        _show_error("MSWLPM chart", _e)
 
 # ======================================================================================
 # TAB 4 : NOTES
