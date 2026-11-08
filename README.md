@@ -34,7 +34,15 @@ The lobe is based on **factory equations tuned from real experiments** (mild ste
 * Charts: nugget growth, dynamic resistance, peak temperature; metrics for penetration and HAZ radius.
 * Optional **calibration** of the 2D model to the lobe equation at the operating point.
 
-### 3. Strength & metallurgy (tab 3)
+### 3. Multi-Stack-Up Weld Lobe Prediction Model – MSWLPM (tab 4)
+Weld-current / weld-time chart that works in **both** the Factory and the Generic model. Three limit lines: yellow = minimum (general-spot) nugget, blue = important-spot nugget, red = largest nugget before expulsion (k_exp·√t, editable); green dashed = the **acceptable nugget Ø you select** between the two, with force and time for each sheet thickness (50 Hz; ×1.2 for 60 Hz).
+* **Mitsubishi A / B / C class overlay:** the Mitsubishi welding-parameter table (mild steel, AC, 2 equal sheets) is built in. A = best, B = medium, C = ordinary condition. It is scaled to your stack: current × √(t_total / 2t), material heat/force factors, zinc +20 %, MFDC factor.
+* **Cross arrows:** like the original Mitsubishi chart, a double-headed arrow through each thickness point (and your combination) shows the applicable current/time range at that force, following the constant-nugget line; the span is adjustable.
+* **2 or 3 panels (sidebar):** choose the number of panels. For 3 panels the app sets t1 = medium thickness and t2 = sum of the other two sheets, and the factory equations use the same rule.
+* **Other materials (AHSS, UHSS, HPF):** scaled with the material factors (editable in the Factory model; taken from the material table in the Generic model).
+* Check: for mild steel AC the equation (general nugget) is within about 4 % of the Mitsubishi A-class current up to 1.6 mm and 7–10 % lower at 2.0–2.4 mm. Material factors and the MFDC factor are assumptions; the table was transcribed from a screenshot, so verify the values.
+
+### 4. Strength & metallurgy (tab 3)
 Tensile-shear and cross-tension estimates, ductility ratio, fusion-zone and HAZ hardness, and a predicted failure mode, using either the lobe-model nugget or the 2D-simulation nugget.
 
 ### 4. Materials
