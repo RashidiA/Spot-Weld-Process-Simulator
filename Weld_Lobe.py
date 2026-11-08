@@ -242,7 +242,7 @@ materials_db = {
 # SIDEBAR INPUTS
 # ======================================================================================
 with st.sidebar:
-    st.caption("Weld_Lobe v3.1")
+    st.caption("Weld_Lobe v3.2")
     transformer = st.radio("⚡ Transformer type", ["AC transformer", "MFDC transformer"],
                            help="Factory equations differ between AC and MFDC transformers (efficiency constant 0.241 for AC, 0.37 for MFDC). Applies to the Factory model and to every material.")
     mfdc = transformer.startswith("MFDC")
@@ -796,7 +796,7 @@ with tab_wcct:
 
         st.markdown(f"#### WCCT chart — {transformer}, {'3' if len(layers_t) == 3 else '2'} panels" + ("" if factory else "  (generic model: same chart, scaled for your materials)"))
         st.caption("Weld current vs weld time for each sheet thickness. **Yellow** = minimum (general-spot) nugget, **blue** = maximum (important-spot) nugget, "
-                   "**green dashed** = the nugget Ø you pick. Optional markers show the **Mitsubishi A / B / C class** table (mild steel, AC, 2 panels) scaled to your stack. "
+                   "**green dashed** = the nugget Ø you pick. **Cross arrows** (as in the original Mitsubishi chart) show the applicable current/time range through each thickness point at its force. Optional markers show the **Mitsubishi A / B / C class** table (mild steel, AC, 2 panels) scaled to your stack. "
                    "For 3 panels the sidebar input sets t1 = medium thickness and t2 = sum of the other two.")
         cA, cB = st.columns([2, 1])
         gD, iD = k_gen * np.sqrt(tm_w), k_imp * np.sqrt(tm_w)
@@ -807,6 +807,8 @@ with tab_wcct:
                               float(round(gD, 2)), float(round(iD, 2)), float(round((gD + iD) / 2.0, 2)), step=0.05)
             show_cls = st.multiselect("Mitsubishi classes to overlay", ["A", "B", "C"], default=["A"], format_func=lambda c: _MIT_NAME[c],
                                       help="A = best condition (short time, high current), C = ordinary condition (long time, low current). Class B/C need many more cycles, so the time axis grows.")
+            span = st.slider("Cross-arrow span (± % of weld time around each recommended point)", 10, 60, 35, step=5,
+                             help="Double-headed arrows follow the constant-nugget line (current² × time = constant): lower current with longer time on one end, higher current with shorter time on the other.") / 100.0
         k_sel = d_sel / np.sqrt(tm_w)
         with cB:
             st.markdown(f"**Combination:** t1 = {w_t1:.2f} mm, t2 = {w_t2:.2f} mm (total {tt_w:.2f} mm)")
@@ -833,12 +835,25 @@ with tab_wcct:
             tt_ = _MIT_T[(_MIT_T >= 0.6) & (_MIT_T <= 2.4)]
             mit_lines[c] = np.array([mit_point(c, t_, 2 * t_) for t_ in tt_]); mit_lines[c] = (tt_, mit_lines[c])
         mit_my = {c: mit_point(c, tm_w, tt_w) for c in ("A", "B", "C")}
+        lab = [0.8, 0.9, 1.0, 1.2, 1.4, 1.6, 1.8, 2.0]
+        idx0 = [int(np.where(th == v)[0][0]) for v in lab if v in th]
 
-        xs = [lines["gen"][:, 0], lines["imp"][:, 0], [my["sel"][0]]] + [v[1][:, 0] for v in mit_lines.values()] + [[mit_my[c][0]] for c in show_cls]
-        ys = [lines["imp"][:, 1], [my["sel"][1]]] + [v[1][:, 1] for v in mit_lines.values()] + [[mit_my[c][1]] for c in show_cls]
+        def arrow_ends(I_, c_):
+            ch, cl = c_ * (1 + span), max(c_ * (1 - span), 0.5)
+            return (I_ * np.sqrt(c_ / ch), ch), (I_ * np.sqrt(c_ / cl), cl)      # upper-left end, lower-right end (iso-nugget: I²·c = const)
+        arrows = [(lines["sel"][i, 0], lines["sel"][i, 1], lines["sel"][i, 2], "#2e7d32") for i in idx0] + [(my["sel"][0], my["sel"][1], my["sel"][2], "#000000")]
+        ends = [arrow_ends(a[0], a[1]) for a in arrows]
+        xs = [lines["gen"][:, 0], lines["imp"][:, 0], [my["sel"][0]]] + [v[1][:, 0] for v in mit_lines.values()] + [[mit_my[c][0]] for c in show_cls] + [[e[0][0], e[1][0]] for e in ends]
+        ys = [lines["imp"][:, 1], [my["sel"][1]]] + [v[1][:, 1] for v in mit_lines.values()] + [[mit_my[c][1]] for c in show_cls] + [[e[0][1], e[1][1]] for e in ends]
         x0, x1 = float(np.floor(min(np.min(a) for a in xs) - 0.6)), float(np.ceil(max(np.max(a) for a in xs) + 0.6))
         y1 = float(np.ceil(max(np.max(a) for a in ys) + 2)); y0 = 0.0
 
+        ann_list = []
+        for (I_, c_, F_, col_), (ul, lr) in zip(arrows, ends):
+            ann_list.append(dict(x=lr[0], y=lr[1], ax=ul[0], ay=ul[1], xref="x", yref="y", axref="x", ayref="y", showarrow=True,
+                                 arrowhead=2, startarrowhead=2, arrowsize=1.1, arrowwidth=1.6, arrowcolor=col_, text=""))
+            ann_list.append(dict(x=ul[0], y=ul[1], xref="x", yref="y", showarrow=False, text=f"{F_:.0f} kgf", font=dict(size=10, color=col_),
+                                 xanchor="right", yanchor="bottom"))
         figW = go.Figure()
         figW.add_trace(go.Scatter(x=lines["gen"][:, 0], y=lines["gen"][:, 1], mode="lines+markers", name="Minimum nugget (general points)",
                                   line=dict(color="#f9a825", width=4), marker=dict(size=6, color="#f9a825")))
@@ -867,7 +882,7 @@ with tab_wcct:
         figW.update_layout(template="plotly_white", height=660, margin=dict(l=60, r=70, b=60, t=40), shapes=shapes_w,
                            xaxis=dict(title="Welding current (kA)", range=[x0, x1], dtick=1, gridcolor="#cfd8dc"),
                            yaxis=dict(title="Weld time (cycles, 50 Hz)", range=[y0, y1], dtick=2 if y1 < 40 else 5, gridcolor="#cfd8dc"),
-                           legend=dict(orientation="h", y=-0.16))
+                           annotations=ann_list, legend=dict(orientation="h", y=-0.16))
         st.plotly_chart(figW, use_container_width=True)
         st.caption("Right-hand 60 Hz scale: multiply the 50 Hz cycles by 1.2.")
 
